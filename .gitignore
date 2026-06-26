@@ -1,0 +1,5 @@
+# AI / agent planning artifacts — keep local, do not track in the repo
+docs/superpowers/
+CLAUDE.md
+AGENTS.md
+.claude/
