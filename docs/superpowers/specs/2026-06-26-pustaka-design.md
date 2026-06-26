@@ -13,7 +13,7 @@ Flutter mobile app captures pages; a Go backend stores them and runs a **two-sta
 pipeline** — per-page OCR (**GLM-OCR**) then a **template-driven transform** (**qwen2.5:14b**) —
 turning scans into a chosen output format. A Kindle/Google-Books-style reader browses the
 library. All inference runs **locally via Ollama on the GPU box `msi`** over Tailscale; nothing
-leaves the host. It is **multi-user** (open self-signup) — each account's library is fully private.
+leaves the host. It is **multi-user** with **email-verified** open self-signup (Resend, behind a swappable mail port) — each account's library is fully private.
 
 **Long-term vision:** a general "scan → transform" engine where *templates* produce any of:
 structured data, a clean reformatted document, a filled artifact, or just searchable text.
@@ -36,9 +36,11 @@ lenient JSON parse, schema validation, GPU-free testing).
 - Store templates, OCR results, and outputs in Postgres; page images on a filesystem volume.
 - Self-host on the dev box behind Caddy, like the other apps.
 - **Multi-user:** open self-signup (register/login), per-user data isolation, and an admin role.
+- **Email-verified registration:** confirm the address before activation, via **Resend** behind a swappable **Mailer port**.
 
 **Non-goals (v1)** — deferred, not designed now
 - Orgs / teams, **sharing** documents or templates between users, billing, or per-user quotas (flat user list; each user's data is fully private; built-in templates are shared).
+- Password reset / magic-link login / 2FA (later — the same Mailer port enables them).
 - Offline-first capture + sync (v1 is online-only).
 - User-defined templates (v1 ships built-in templates only).
 - Polished ePub/PDF export, advanced page edge-detection/deskew beyond a basic crop.
@@ -53,6 +55,8 @@ extended). Each user's documents/outputs are **fully private** (owner-scoped); b
 are shared (global). One **admin** role (seeded) manages users + built-in templates; everyone else
 is a regular user. Scale target: a handful of users, a personal library each. Open signup means
 basic rate-limiting/validation on registration (see §11), especially if the instance is exposed.
+Registration requires **email verification** (a one-time code emailed via Resend) before the
+account is activated and can obtain a session.
 
 ---
 
@@ -70,6 +74,7 @@ AIClient:   Transcribe(ctx, imageBytes) → markdown            // GLM-OCR via /
             Transform(ctx, ocrText, template) → output         // qwen2.5:14b via /api/chat
 BlobStore:  Put(docID, page, bytes) / Get / Delete / Thumbnail
 Store:      sqlc Queries + ExecTx (transactions)
+Mailer:     SendVerificationCode(ctx, email, code)  (+ generic Send)   // Resend adapter; swappable
 ```
 
 **Flow**
@@ -91,7 +96,9 @@ additionally manage built-in (global) templates and users.
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `web_user` | id, username, password_hash, **role** (`admin`\|`user`), created_at | open self-signup; new users get `user`; a seeded admin exists |
+| `web_user` | id, username, **email** (unique), password_hash, **role** (`admin`\|`user`), **email_verified** (bool), created_at | new users get `user` + `email_verified=false`; a seeded admin exists (pre-verified) |
+| `email_verification` | id, user_id, **code_hash**, expires_at, attempts, consumed_at, created_at | single-use 6-digit code; **hashed**; 15-min expiry; max 5 attempts; throttled resend |
+| `session` | id, user_id, **refresh_token_hash**, expires_at, created_at, revoked_at | refresh tokens stored **hashed**; enables logout / revocation / rotation |
 | `document` | id, **user_id** (owner), title, **mode** (`photo`\|`text`), page_count, status, created_at | a captured doc; owner-scoped |
 | `page` | id, document_id, page_number, **image_path** (nullable), **thumb_path** (nullable), width, height, status | image_path null in text mode (or after discard) |
 | `ocr_result` | id, page_id, model, text (Markdown), status, created_at | per page; re-runnable, latest wins |
@@ -138,7 +145,7 @@ Configurable via env (`OLLAMA_HOST`, `OCR_MODEL`, `TRANSFORM_MODEL`). `OLLAMA_HO
 
 ## 8. API surface (Go/Fiber, `/api/*`, JWT)
 
-- `POST /auth/register` (open signup) · `POST /auth/login` · `GET /auth/me`
+- `POST /auth/register` (open signup → unverified user, emails a code) · `POST /auth/verify-email` `{email, code}` (activate → tokens) · `POST /auth/resend-verification` `{email}` (throttled) · `POST /auth/login` (rejected until verified) · `POST /auth/refresh` (rotate) · `POST /auth/logout` (revoke) · `GET /auth/me`
 - `POST /documents` `{title, mode}` · `GET /documents` (library + thumb URLs) · `GET /documents/:id`
 - `POST /documents/:id/pages` (multipart `file`) → store (+ blob if photo) → OCR → return text
 - `GET /documents/:id/pages/:n/image` · `.../thumb`
@@ -157,12 +164,12 @@ endpoints manage users and built-in templates.
 
 ## 9. Mobile app (Flutter, feature-first)
 
-Screens: **Register / Login** · **Library** (thumbnail grid, mode badge, status) · **Capture** (new doc →
+Screens: **Register / Verify-email / Login** · **Library** (thumbnail grid, mode badge, status) · **Capture** (new doc →
 title + mode → camera, compress, upload, see per-page OCR, add next / finish) · **Reader**
 (Kindle-like: swipe pages, pinch-zoom, **image⇄text** toggle, view outputs) · **Transform**
 (pick template → run → view rendered output → export/share) · **Templates** (browse).
 
-State: Riverpod; nav: go_router; HTTP: dio with JWT interceptor + 401 logout (HAKA/pasar pattern).
+State: Riverpod; nav: go_router; HTTP: dio with an interceptor that **refreshes on 401** then retries (logout if refresh fails). Tokens (access + refresh) kept in **flutter_secure_storage**, not plain SharedPreferences.
 
 ---
 
@@ -174,7 +181,18 @@ State: Riverpod; nav: go_router; HTTP: dio with JWT interceptor + 401 logout (HA
 
 ---
 
-## 11. Error handling & status
+## 11. Security, error handling & status
+
+**Security (first-class — "very good" by design):**
+- **Passwords:** bcrypt (cost ~12, `pkg/hash`); argon2id is a drop-in upgrade behind the same helper.
+- **Sessions:** short-lived **access JWT** (~15 min) + **refresh token** (rotating, stored **hashed** in `session`, revocable on logout); JWT secret in env, never committed.
+- **Email verification:** 6-digit **CSPRNG** code, stored **hashed**, **single-use**, **15-min** expiry, **max 5 attempts**, **throttled resend**; **unverified accounts cannot obtain a session**.
+- **Rate-limiting** on `register`/`login`/`verify-email`/`resend`/`refresh` (per-IP + per-account); login backoff/lockout.
+- **Enumeration-resistant:** generic responses on register/resend/verify; **constant-time** comparison of codes/secrets.
+- **Transport & secrets:** HTTPS only (Caddy); `RESEND_API_KEY`, JWT secret, DB creds in gitignored env; Resend uses a **verified sending domain** (SPF/DKIM/DMARC) so mail isn't spoofable.
+- **Authorization:** owner-scoping (§4/§5) enforced server-side on every request; admin checks on admin-only routes.
+
+**Operational:**
 
 - Every `page`/`ocr_result`/`output` carries a status; incremental per-page means partial
   progress survives a failure; per-page **retry** in the UI.
@@ -189,7 +207,7 @@ State: Riverpod; nav: go_router; HTTP: dio with JWT interceptor + 401 logout (HA
 
 - **Backend:** Go integration tests with **testcontainers-Postgres** (pasar pattern); unit-test
   the template engine's deterministic parts (prompt build, output parse/validate) with a
-  **mocked `AIClient`** — no GPU in CI, exactly like invoice-extractor. Plus an **owner-isolation** test (user A cannot read or modify user B's documents/outputs) — security-critical.
+  **mocked `AIClient`** — no GPU in CI, exactly like invoice-extractor. Plus an **owner-isolation** test (user A cannot read or modify user B's documents/outputs) — security-critical. Auth flow tested with a **mocked `Mailer` port** (no real email): verify-code happy path, expiry, attempt cap, unverified-login rejection, refresh rotation + revocation, and rate-limit behavior.
 - **Mobile:** smoke/widget tests for capture→OCR and reader (later; minimal in v1).
 - **CI:** GitHub Actions — `go vet`/`go test`; Flutter analyze/test.
 
@@ -201,16 +219,17 @@ State: Riverpod; nav: go_router; HTTP: dio with JWT interceptor + 401 logout (HA
 ```
 cmd/server/main.go                 # composition root: config → adapters → services → http
 internal/
-  config/                          # env (OLLAMA_HOST, model tags, BLOB_DIR, JWT, DB)
-  domain/                          # entities + PORT interfaces only (zero infra deps)
+  config/                          # env (OLLAMA_HOST, model tags, BLOB_DIR, JWT secret, DB, RESEND_API_KEY, MAIL_FROM)
+  domain/                          # entities + PORT interfaces only: AIClient, BlobStore, Store, Mailer
   app/{document,ocr,transform,template}/   # use-cases (orchestration)
   adapter/
     httpapi/{handler,middleware,router.go} # driving adapter (Fiber)
     store/{sqlc,queries,migrations}        # pgx + sqlc (generated; do not edit sqlc/)
     ai/{client.go,prompts,parse}           # Ollama AIClient (GLM-OCR + qwen2.5); ported prompts/parse
     blob/                                  # filesystem images + thumbnails
+    mail/                                  # Mailer port impl: Resend adapter (swappable: SMTP/SES later)
   pkg/{jwt,hash}
-db/{migrations,queries,seed.sql}   # seed = admin user + the 2 built-in templates
+db/{migrations,queries,seed.sql}   # seed = admin user (pre-verified) + the 2 built-in templates
 ```
 
 **Mobile (`mobile/lib/`)**
@@ -253,7 +272,7 @@ rate-limiting — *not* Caddy `basic_auth`, which would block registration.)**
 
 User-defined templates; more template families (filled forms, CSV/XLSX, ePub/PDF export); the
 engine/app split (extract a stateless transform service); offline-first capture + sync;
-batch/whole-document OCR options; better crop/deskew; orgs/teams, sharing documents/templates between users, per-user quotas.
+batch/whole-document OCR options; better crop/deskew; orgs/teams, sharing documents/templates between users, per-user quotas; **password reset, magic-link login, 2FA, and extra Mailer adapters (SMTP/SES)** — all enabled by the Mailer port.
 
 ---
 
@@ -272,6 +291,10 @@ batch/whole-document OCR options; better crop/deskew; orgs/teams, sharing docume
 - **Multi-user, open self-signup.** Ownership designed in from the start (every doc/output
   owner-scoped; templates global vs per-user) rather than retrofitted. Kept to a flat user list +
   one admin role — no orgs/teams/sharing/billing in v1 — so it stays a single implementation plan.
+- **Email-verified signup behind a `Mailer` port.** Resend is one adapter; SMTP/SES (and later
+  password-reset / magic-link) drop in without touching call sites. Security hardening (hashed
+  single-use codes, rate-limits, refresh-token rotation, enumeration-resistance) is specified up
+  front given the "very good security" requirement.
 
 ---
 
@@ -280,3 +303,5 @@ batch/whole-document OCR options; better crop/deskew; orgs/teams, sharing docume
 - Structured-template UX: does the user supply field names per run, or pick a preset schema? (v1
   ships one preset; revisit when user-defined templates land.)
 - Output export formats priority for v2 (CSV vs ePub vs PDF).
+- Email verification UX: **6-digit code** (chosen — best mobile UX) vs magic-link (needs deep-linking). Flip if you prefer links.
+- Confirm the **access + refresh** token model (chosen for security) vs a single longer-lived JWT (simpler).
