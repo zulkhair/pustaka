@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 >
-> **READ THE "Required corrections" SECTION BELOW BEFORE STARTING.** The drafted tasks were written in parallel against the contract; the review pass found cross-task naming/consistency issues, two missing tasks, and security hardenings. The corrections are **authoritative** — apply each as you reach the relevant task. Where a task body and a correction disagree, the correction wins.
+> The 23 adversarial-review corrections have been **applied inline** to the 22 tasks below, and the plan was re-verified for consistency. Implement task-by-task.
 
 **Goal:** Stand up the Pustaka Go backend with an email-verified, multi-user, hardened auth API (register → verify-email → login → refresh/logout, plus `/auth/me` and `/health`), on a ports-&-adapters foundation that is fully testable without a GPU or real email.
 
@@ -63,38 +63,9 @@ backend/
 
 ---
 
-## ⚠️ Required corrections (authoritative — apply as you implement; correction wins over any task body)
-
-The tasks below were drafted before this review pass. Apply every item:
-
-1. **Handler type:** use `AuthHandler` / `NewAuthHandler(svc *auth.Service) *AuthHandler` and methods on `*AuthHandler` in **every** handler task (the Register/Verify tasks as drafted may say `Handler`/`NewHandler` — rename).
-2. **Error mapper:** in the **Register task**, add a step creating `func mapAuthError(c *fiber.Ctx, err error) error` per the contract error→HTTP table, with a micro-test. **All** handlers call `mapAuthError`. Remove every `mapError` reference.
-3. **Migration runner:** standardize on `store.RunMigrations(databaseURL string) error` using `//go:embed db/migrations/*.sql` + golang-migrate **iofs** + the `postgres` driver (NOT `pgx5://`). Prod-skip is the caller's job (`main.go`: `if cfg.AppEnv != "prod"`). Update the DB task, the store test, `cmd/server/main.go`, and the E2E to call `store.RunMigrations(dsn)`. Delete any 3-arg `Migrate`.
-4. **DB pool:** add `store.OpenPool(ctx, url)` that pings (fail-fast); `main.go` uses it.
-5. **Mailer:** `mail.NewResendMailer(cfg config.Config) *ResendMailer`; exported `MockMailer{LastEmail,LastCode string; Sends []MockSend}` + `NewMockMailer()` + `(m *MockMailer) CodeFor(email)(string,bool)`. `main.go` calls `mail.NewResendMailer(cfg)`; tests read the code via `CodeFor(email)` or the `LastCode` field. Remove `mail.NewResend(...)` and any `LastCode(email)` method call.
-6. **sqlc.yaml once:** only the migration task creates `sqlc.yaml`, with `emit_pointers_for_null_types: true`. Remove `sqlc.yaml` from the scaffold task.
-7. **store.go imports** must include `github.com/jackc/pgx/v5/pgtype` inside the code listing (not a prose note).
-8. **issueTokens once:** define `func (s *Service) issueTokens(ctx, u domain.User)(Tokens,error)` only in the VerifyEmail task; VerifyEmail/Login/Refresh all call it. Remove the duplicate definition in the Login task.
-9. **NEW task — Shared test harness (place right before the Register task):** create `internal/testsupport/testsupport.go` with `NewTestStore(t)(*store.Store, func())` (testcontainers `postgres.Run` + `store.RunMigrations`, returns concrete `*store.Store` + cleanup) and `BackdateVerification(t, pool *pgxpool.Pool, userID string, ts time.Time)`; and `internal/adapter/httpapi/harness_test.go` with `type testApp`, `newTestApp(t) *testApp` (exposes `app *fiber.App`, `store *store.Store`, `mailer *mail.MockMailer`), `doJSON(method,path,body)`, `doRaw`, and `seedUnverifiedUser`/`seedVerifiedUser`/`seedUnverifiedUserWithPassword`. **Every** later handler/E2E test uses these exact helpers (no ad-hoc `newTestStore`/mocks).
-10. **testcontainers:** use `postgres.Run(ctx,"postgres:16-alpine", postgres.WithDatabase/Username/Password(...), testcontainers.WithWaitStrategy(...))` + `container.ConnectionString(ctx,"sslmode=disable")` everywhere; pin testcontainers in go.mod. Drop `tcpg.RunContainer`/`WithImage`.
-11. **NEW task — `AuthService.Me` + handler (place in Cluster E, before the middleware task):** TDD `func (s *Service) Me(ctx, userID string)(domain.User,error)` (GetUserByID, maps not-found→ErrNotFound), `func (h *AuthHandler) Me(c *fiber.Ctx) error` (reads `c.Locals("userID")`, returns `MeDTO`), define `MeDTO`. Router wires `GET /api/auth/me` with `RequireAuth`.
-12. **Seed:** replace any hardcoded bcrypt hash with `cmd/seed/main.go` — idempotent upsert reading `ADMIN_USERNAME`/`ADMIN_EMAIL`/`ADMIN_PASSWORD`, hashing via `pkg/hash.HashPassword`, role=admin, email_verified=true. `make seed` runs it. Delete the fake-hash `seed.sql` and the false pgcrypto/`gen_random_uuid()` comment. The E2E asserts the admin can log in.
-13. **No README:** do not create `backend/README.md` (house rule). Put run notes in Makefile help text / `.env.example` comments.
-14. **Register validation:** add `ErrValidation` (domain) → 400. Register returns `ErrValidation` for empty fields / invalid email / password < 8 (NOT `ErrInvalidCredentials`). Register success returns `OK(c, nil)` (no nested `data.message`).
-15. **Login enumeration:** unknown identifier **or** wrong password → identical `ErrInvalidCredentials`; correct password but `!EmailVerified` → `ErrEmailNotVerified`. (Deliberate trade-off: the verified-status signal requires valid credentials, so it isn't a meaningful enumeration vector; it buys clear "please verify" UX.)
-16. **Login email normalization:** when `Identifier` contains `@`, look up via `GetUserByEmail(normalizeEmail(Identifier))` matching Register's lowercase+trim.
-17. **Resend = silent generic 200:** `ResendVerification` enforces the cooldown as a **silent no-op** (return nil) and is a no-op for unknown/verified emails; the handler **always** returns the same generic 200. No 429 cooldown response. Test asserts a uniform 200 across unknown/verified/cooldown/fresh.
-18. **Refresh reuse = theft response:** when the matched session is already revoked, call `store.RevokeAllUserSessions(ctx, sess.UserID)` before returning `ErrUnauthorized`; test asserts a replay also kills the live session.
-19. **Atomic attempt cap:** `IncrementVerificationAttempts` does a guarded `UPDATE ... SET attempts = attempts + 1 WHERE id=$1 RETURNING attempts`; VerifyEmail enforces `MaxAttempts` on the **returned** count (increment-then-compare) so concurrency can't exceed the cap.
-20. **Fiber behind Caddy:** `BuildApp` uses the `ProxyHeader`/`EnableTrustedProxyCheck`/`TrustedProxies` config above so `RateLimit`'s `c.IP()` is the real client. The Caddyfile must forward `X-Forwarded-For`.
-21. **Per-account rate-limit (scoping note):** Plan-1 `RateLimit` is per-IP+path only. A per-account / login-lockout dimension is **deferred to a named follow-up hardening task** (conscious decision — state it in the RateLimit task's notes).
-22. **Register test cfg:** set `CodeTTL: 15 * time.Minute` explicitly (no zero value).
-23. **Final numbering:** with the two NEW tasks (test harness + Me), the plan is **22 tasks**. Renumber sequentially and fix cross-references when executing.
-
 ---
 
-# Drafted tasks
-
+# Tasks
 
 ## Cluster A — Foundation & infra (Tasks 1–4)
 
@@ -107,13 +78,12 @@ The tasks below were drafted before this review pass. Apply every item:
 - Create: `backend/Makefile`
 - Create: `backend/docker-compose.yml`
 - Create: `backend/.env.example`
-- Create: `backend/sqlc.yaml`
 - Create: `backend/cmd/server/main.go`
 - Test: build smoke via `go build ./...` (no Go test file; the compile + healthy DB is the gate)
 
 **Interfaces:**
 - Consumes: nothing (this is the root task).
-- Produces: the module `github.com/zulkhair/pustaka/backend` (so every later import path resolves), a compiling `cmd/server/main.go` entrypoint, and a healthy Postgres on `127.0.0.1:5434` for Task 3's testcontainers parity and local `make run`.
+- Produces: the module `github.com/zulkhair/pustaka/backend` (so every later import path resolves), a compiling `cmd/server/main.go` entrypoint, and a healthy Postgres on `127.0.0.1:5434` for Task 3's testcontainers parity and local `make run`. `sqlc.yaml` is NOT created here — it is created once in the migration task (Task 5).
 
 - [ ] **Step 1: Create the module skeleton and pin Go.** Create `backend/go.mod`:
   ```go
@@ -176,7 +146,7 @@ The tasks below were drafted before this review pass. Apply every item:
     pustaka_pgdata:
   ```
 
-- [ ] **Step 6: Create `.env.example` listing every Config key.** Create `backend/.env.example`:
+- [ ] **Step 6: Create `.env.example` listing every Config key.** Create `backend/.env.example` (the comments double as run notes since no README is created — house rule):
   ```dotenv
   # Server
   APP_ENV=dev
@@ -200,28 +170,23 @@ The tasks below were drafted before this review pass. Apply every item:
   VERIFICATION_CODE_TTL=15m
   VERIFICATION_MAX_ATTEMPTS=5
   RESEND_COOLDOWN=60s
+
+  # Seed admin (consumed by `make seed` / cmd/seed)
+  ADMIN_USERNAME=admin
+  ADMIN_EMAIL=admin@pustaka.local
+  ADMIN_PASSWORD=admin123
   ```
 
-- [ ] **Step 7: Create the placeholder `sqlc.yaml`.** Create `backend/sqlc.yaml` (queries are authored in later tasks; this fixes the codegen contract — gen path `internal/adapter/store/sqlc`, package `sqlc`):
-  ```yaml
-  version: "2"
-  sql:
-    - engine: "postgresql"
-      schema: "db/migrations"
-      queries: "db/queries"
-      gen:
-        go:
-          package: "sqlc"
-          out: "internal/adapter/store/sqlc"
-          sql_package: "pgx/v5"
-          emit_json_tags: true
-          emit_interface: false
-          emit_empty_slices: true
-  ```
-
-- [ ] **Step 8: Create the Makefile.** Create `backend/Makefile`:
+- [ ] **Step 7: Create the Makefile.** Create `backend/Makefile`. The `help` target prints run notes (no README is created — house rule):
   ```makefile
-  .PHONY: run test vet lint sqlc migrate seed db-up db-down
+  .PHONY: help run test vet lint sqlc migrate seed db-up db-down
+
+  help: ## Show run notes and available targets
+  	@echo "Pustaka backend — local dev"
+  	@echo "  1. make db-up      # start Postgres (binds 127.0.0.1:5434)"
+  	@echo "  2. cp .env.example .env  # set DATABASE_URL, JWT_SECRET, RESEND_API_KEY, MAIL_FROM"
+  	@echo "  3. make run        # auto-migrates unless APP_ENV=prod; listens on :8002"
+  	@echo "  4. make seed       # idempotently upsert the admin account"
 
   run:
   	go run ./cmd/server
@@ -234,15 +199,6 @@ The tasks below were drafted before this review pass. Apply every item:
 
   lint: vet
 
-  sqlc:
-  	sqlc generate
-
-  migrate:
-  	migrate -path db/migrations -database "$(DATABASE_URL)" up
-
-  seed:
-  	psql "$(DATABASE_URL)" -f db/seed.sql
-
   db-up:
   	docker compose up -d db
 
@@ -250,9 +206,9 @@ The tasks below were drafted before this review pass. Apply every item:
   	docker compose down
   ```
 
-- [ ] **Step 9: Bring Postgres up and confirm healthy.** Run `cd backend && docker compose up -d db`, then poll `docker compose ps db` (or `docker inspect --format '{{.State.Health.Status}}' $(docker compose ps -q db)`) until it reports `healthy`. EXPECT: container reaches `healthy` within ~30s. Leave it running for Task 3.
+- [ ] **Step 8: Bring Postgres up and confirm healthy.** Run `cd backend && docker compose up -d db`, then poll `docker compose ps db` (or `docker inspect --format '{{.State.Health.Status}}' $(docker compose ps -q db)`) until it reports `healthy`. EXPECT: container reaches `healthy` within ~30s. Leave it running for Task 3.
 
-- [ ] **Step 10: Commit.** `git add backend && git commit -m "chore: scaffold pustaka backend module and compose"`. (No `Co-Authored-By` trailer.)
+- [ ] **Step 9: Commit.** `git add backend && git commit -m "chore: scaffold pustaka backend module and compose"`. (No `Co-Authored-By` trailer.)
 
 ---
 
@@ -476,27 +432,25 @@ The tasks below were drafted before this review pass. Apply every item:
 **Files:**
 - Create: `backend/internal/adapter/store/db.go`
 - Test: `backend/internal/adapter/store/db_test.go`
-- Create (fixture for the test only): `backend/internal/adapter/store/testdata/migrations/000001_smoke.up.sql`
-- Create (fixture for the test only): `backend/internal/adapter/store/testdata/migrations/000001_smoke.down.sql`
 
 **Interfaces:**
 - Consumes: `config.Config` from Task 2 (`cfg.DatabaseURL`, `cfg.AppEnv`).
-- Produces (later tasks — store wrapper in Cluster B and `main.go` rely on these VERBATIM):
+- Produces (later tasks — store wrapper in Task 6 and `main.go` in Task 22 rely on these VERBATIM):
   ```go
-  func OpenPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error)
-  func Ping(ctx context.Context, pool *pgxpool.Pool) error
-  func Migrate(databaseURL, migrationsDir, appEnv string) error // no-op when appEnv == "prod"
+  func OpenPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) // pings; fail-fast
+  func RunMigrations(databaseURL string) error // //go:embed db/migrations/*.sql + golang-migrate iofs; CWD-independent
   ```
-  The real migration FILES under `backend/db/migrations` are authored in Task 5; this task builds the generic runner and pool only, and proves them against a throwaway smoke migration under `testdata/`.
+  `RunMigrations` embeds the real migration FILES under `backend/db/migrations` (authored in Task 5) via `//go:embed`, so it is CWD-independent and needs no migrations-dir argument. Prod-skip is the caller's job (`main.go`: `if cfg.AppEnv != "prod"`). This task creates the embed directory placeholder so the build compiles before Task 5 fills it in.
 
-- [ ] **Step 1: Write the smoke migration fixtures.** Create `backend/internal/adapter/store/testdata/migrations/000001_smoke.up.sql`:
-  ```sql
-  CREATE TABLE smoke (id INT PRIMARY KEY);
-  ```
-  Create `backend/internal/adapter/store/testdata/migrations/000001_smoke.down.sql`:
-  ```sql
-  DROP TABLE smoke;
-  ```
+- [ ] **Step 1: Create the embed target directory and a placeholder migration so `//go:embed` compiles.** Create `backend/db/migrations/.gitkeep` (empty) and a throwaway smoke migration this task tests against, replaced by the real init migration in Task 5:
+  - Create `backend/db/migrations/000001_smoke.up.sql`:
+    ```sql
+    CREATE TABLE smoke (id INT PRIMARY KEY);
+    ```
+  - Create `backend/db/migrations/000001_smoke.down.sql`:
+    ```sql
+    DROP TABLE smoke;
+    ```
 
 - [ ] **Step 2: Write the failing test.** Create `backend/internal/adapter/store/db_test.go`:
   ```go
@@ -533,20 +487,20 @@ The tasks below were drafted before this review pass. Apply every item:
   	return dsn
   }
 
-  func TestOpenPoolAndPing(t *testing.T) {
+  func TestOpenPoolPings(t *testing.T) {
   	dsn := startPostgres(t)
   	ctx := context.Background()
   	pool, err := OpenPool(ctx, dsn)
   	require.NoError(t, err)
   	t.Cleanup(pool.Close)
-  	require.NoError(t, Ping(ctx, pool))
+  	require.NoError(t, pool.Ping(ctx))
   }
 
-  func TestMigrateAppliesFiles(t *testing.T) {
+  func TestRunMigrationsAppliesEmbeddedFiles(t *testing.T) {
   	dsn := startPostgres(t)
   	ctx := context.Background()
 
-  	require.NoError(t, Migrate(dsn, "testdata/migrations", "dev"))
+  	require.NoError(t, RunMigrations(dsn))
 
   	pool, err := OpenPool(ctx, dsn)
   	require.NoError(t, err)
@@ -557,46 +511,33 @@ The tasks below were drafted before this review pass. Apply every item:
   		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'smoke')`,
   	).Scan(&exists)
   	require.NoError(t, err)
-  	require.True(t, exists, "smoke table should exist after migrate")
-  }
-
-  func TestMigrateSkippedInProd(t *testing.T) {
-  	dsn := startPostgres(t)
-  	ctx := context.Background()
-
-  	require.NoError(t, Migrate(dsn, "testdata/migrations", "prod"))
-
-  	pool, err := OpenPool(ctx, dsn)
-  	require.NoError(t, err)
-  	t.Cleanup(pool.Close)
-
-  	var exists bool
-  	err = pool.QueryRow(ctx,
-  		`SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'smoke')`,
-  	).Scan(&exists)
-  	require.NoError(t, err)
-  	require.False(t, exists, "migrate must be a no-op when appEnv==prod")
+  	require.True(t, exists, "smoke table should exist after RunMigrations")
   }
   ```
 
-- [ ] **Step 3: Run the test and state expected FAIL.** Run `cd backend && go test ./internal/adapter/store/...`. EXPECT: FAIL to compile — `db.go` does not exist, so `OpenPool`/`Ping`/`Migrate` are undefined (and the testcontainers/pgx deps are not yet required).
+- [ ] **Step 3: Run the test and state expected FAIL.** Run `cd backend && go test ./internal/adapter/store/...`. EXPECT: FAIL to compile — `db.go` does not exist, so `OpenPool`/`RunMigrations` are undefined (and the testcontainers/pgx/golang-migrate deps are not yet required).
 
-- [ ] **Step 4: Write the minimal implementation.** Create `backend/internal/adapter/store/db.go`:
+- [ ] **Step 4: Write the minimal implementation.** Create `backend/internal/adapter/store/db.go`. It embeds `db/migrations/*.sql` relative to this file and drives golang-migrate via the `iofs` source + the `postgres` database driver (NOT `pgx5://`), so it is CWD-independent:
   ```go
   package store
 
   import (
   	"context"
+  	"embed"
   	"errors"
   	"fmt"
 
   	"github.com/golang-migrate/migrate/v4"
-  	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-  	_ "github.com/golang-migrate/migrate/v4/source/file"
+  	"github.com/golang-migrate/migrate/v4/database/postgres"
+  	"github.com/golang-migrate/migrate/v4/source/iofs"
   	"github.com/jackc/pgx/v5/pgxpool"
+  	"github.com/jackc/pgx/v5/stdlib"
   )
 
-  // OpenPool opens a pgx connection pool and verifies connectivity.
+  //go:embed db/migrations/*.sql
+  var migrationFS embed.FS
+
+  // OpenPool opens a pgx connection pool and verifies connectivity (fail-fast).
   func OpenPool(ctx context.Context, databaseURL string) (*pgxpool.Pool, error) {
   	pool, err := pgxpool.New(ctx, databaseURL)
   	if err != nil {
@@ -609,36 +550,93 @@ The tasks below were drafted before this review pass. Apply every item:
   	return pool, nil
   }
 
-  // Ping checks the database is reachable.
-  func Ping(ctx context.Context, pool *pgxpool.Pool) error {
-  	if err := pool.Ping(ctx); err != nil {
-  		return fmt.Errorf("store: ping: %w", err)
+  // RunMigrations applies all up migrations embedded under db/migrations. It is
+  // CWD-independent (//go:embed) and uses the postgres database driver. The
+  // prod-skip decision is the caller's responsibility (main.go).
+  func RunMigrations(databaseURL string) error {
+  	src, err := iofs.New(migrationFS, "db/migrations")
+  	if err != nil {
+  		return fmt.Errorf("store: open embedded migrations: %w", err)
+  	}
+
+  	db, err := stdlib.OpenDB(*mustParseConfig(databaseURL))
+  	if err != nil {
+  		return fmt.Errorf("store: open sql db for migrate: %w", err)
+  	}
+  	defer func() { _ = db.Close() }()
+
+  	driver, err := postgres.WithInstance(db, &postgres.Config{})
+  	if err != nil {
+  		return fmt.Errorf("store: build postgres migrate driver: %w", err)
+  	}
+
+  	m, err := migrate.NewWithInstance("iofs", src, "postgres", driver)
+  	if err != nil {
+  		return fmt.Errorf("store: init migrate: %w", err)
+  	}
+  	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
+  		return fmt.Errorf("store: run migrations: %w", err)
   	}
   	return nil
   }
 
-  // Migrate applies all up migrations from migrationsDir. It is a no-op when
-  // appEnv == "prod" (prod migrations are applied out-of-band).
-  func Migrate(databaseURL, migrationsDir, appEnv string) error {
-  	if appEnv == "prod" {
-  		return nil
+  func mustParseConfig(databaseURL string) *stdlib.OptionOpenDB {
+  	_ = stdlib.OptionOpenDB{}
+  	_ = databaseURL
+  	return nil
+  }
+  ```
+  Note: the placeholder `mustParseConfig` helper above is illustrative only — replace it with the direct `stdlib.OpenDB` form using a parsed `pgx.ConnConfig`. The concrete, compilable body is:
+  ```go
+  // RunMigrations applies all up migrations embedded under db/migrations.
+  func RunMigrations(databaseURL string) error {
+  	src, err := iofs.New(migrationFS, "db/migrations")
+  	if err != nil {
+  		return fmt.Errorf("store: open embedded migrations: %w", err)
   	}
-  	m, err := migrate.New("file://"+migrationsDir, databaseURL)
+
+  	connCfg, err := pgx.ParseConfig(databaseURL)
+  	if err != nil {
+  		return fmt.Errorf("store: parse database url: %w", err)
+  	}
+  	db := stdlib.OpenDB(*connCfg)
+  	defer func() { _ = db.Close() }()
+
+  	driver, err := postgres.WithInstance(db, &postgres.Config{})
+  	if err != nil {
+  		return fmt.Errorf("store: build postgres migrate driver: %w", err)
+  	}
+
+  	m, err := migrate.NewWithInstance("iofs", src, "postgres", driver)
   	if err != nil {
   		return fmt.Errorf("store: init migrate: %w", err)
   	}
-  	defer func() { _, _ = m.Close() }()
-
   	if err := m.Up(); err != nil && !errors.Is(err, migrate.ErrNoChange) {
   		return fmt.Errorf("store: run migrations: %w", err)
   	}
   	return nil
   }
   ```
+  Use this concrete body. The import block becomes:
+  ```go
+  import (
+  	"context"
+  	"embed"
+  	"errors"
+  	"fmt"
 
-- [ ] **Step 5: Run the test and state expected PASS.** Run `cd backend && go get github.com/jackc/pgx/v5/pgxpool github.com/golang-migrate/migrate/v4 github.com/testcontainers/testcontainers-go github.com/testcontainers/testcontainers-go/modules/postgres && go mod tidy && go test ./internal/adapter/store/...`. EXPECT: PASS — `OpenPool`+`Ping` succeed against testcontainers Postgres; `Migrate(..., "dev")` creates the `smoke` table; `Migrate(..., "prod")` leaves it absent. (Requires Docker; the Task 1 compose daemon is sufficient.)
+  	"github.com/golang-migrate/migrate/v4"
+  	"github.com/golang-migrate/migrate/v4/database/postgres"
+  	"github.com/golang-migrate/migrate/v4/source/iofs"
+  	"github.com/jackc/pgx/v5"
+  	"github.com/jackc/pgx/v5/pgxpool"
+  	"github.com/jackc/pgx/v5/stdlib"
+  )
+  ```
 
-- [ ] **Step 6: Vet and commit.** Run `cd backend && go vet ./...` (EXPECT: clean), then `git add backend && git commit -m "feat: add pgx pool, ping, and migrate runner"`. (No `Co-Authored-By` trailer.)
+- [ ] **Step 5: Run the test and state expected PASS.** Run `cd backend && go get github.com/jackc/pgx/v5 github.com/jackc/pgx/v5/pgxpool github.com/jackc/pgx/v5/stdlib github.com/golang-migrate/migrate/v4 github.com/testcontainers/testcontainers-go github.com/testcontainers/testcontainers-go/modules/postgres && go mod tidy && go test ./internal/adapter/store/...`. EXPECT: PASS — `OpenPool` connects + pings against testcontainers Postgres; `RunMigrations` creates the `smoke` table from the embedded files. (Requires Docker; the Task 1 compose daemon is sufficient.)
+
+- [ ] **Step 6: Vet and commit.** Run `cd backend && go vet ./...` (EXPECT: clean), then `git add backend && git commit -m "feat: add pgx pool and embedded migration runner"`. (No `Co-Authored-By` trailer.)
 
 ---
 
@@ -692,9 +690,14 @@ The tasks below were drafted before this review pass. Apply every item:
 
 - [ ] **Step 4: Commit.** `git add backend && git commit -m "ci: add backend vet and test workflow"`. (No `Co-Authored-By` trailer.)
 
+---
+
+## Cluster B — Persistence, crypto & domain (Tasks 5–10)
+
 ### Task 5: Migration `000001_init` + `sqlc.yaml`
 
 **Files:**
+- Delete: `backend/db/migrations/000001_smoke.up.sql`, `backend/db/migrations/000001_smoke.down.sql` (the Task 3 placeholders)
 - Create: `backend/db/migrations/000001_init.up.sql`
 - Create: `backend/db/migrations/000001_init.down.sql`
 - Create: `backend/sqlc.yaml`
@@ -702,9 +705,11 @@ The tasks below were drafted before this review pass. Apply every item:
 
 **Interfaces:**
 - Consumes: nothing from other tasks. Uses `testcontainers-go` (`github.com/testcontainers/testcontainers-go/modules/postgres`), `golang-migrate` (`github.com/golang-migrate/migrate/v4` with `database/postgres` + `source/file` drivers), `database/sql` + `jackc/pgx/v5/stdlib`, and `testify`.
-- Produces: the three tables (`web_user`, `email_verification`, `session`) with the exact columns/constraints/indexes other tasks rely on, and `sqlc.yaml` that Task 6 uses to generate `internal/adapter/store/sqlc`.
+- Produces: the three tables (`web_user`, `email_verification`, `session`) with the exact columns/constraints/indexes other tasks rely on, and `sqlc.yaml` (created ONCE here, with `emit_pointers_for_null_types: true`) that Task 6 uses to generate `internal/adapter/store/sqlc`.
 
-- [ ] **Step 1: Write the failing migration test.** It spins up a throwaway Postgres, runs the migrations up, asserts the three tables + key columns + the role CHECK + uniqueness exist via `information_schema`, then runs down and asserts none remain. Create `backend/db/migrations/migrations_test.go`:
+- [ ] **Step 1: Remove the Task 3 smoke placeholders.** Delete `backend/db/migrations/000001_smoke.up.sql` and `backend/db/migrations/000001_smoke.down.sql` so the embedded migration set contains only the real init migration.
+
+- [ ] **Step 2: Write the failing migration test.** It spins up a throwaway Postgres, runs the migrations up, asserts the three tables + key columns + the role CHECK + uniqueness exist via `information_schema`, then runs down and asserts none remain. Create `backend/db/migrations/migrations_test.go`:
   ```go
   package migrations_test
 
@@ -722,21 +727,20 @@ The tasks below were drafted before this review pass. Apply every item:
 
   	"github.com/stretchr/testify/require"
   	"github.com/testcontainers/testcontainers-go"
-  	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
+  	"github.com/testcontainers/testcontainers-go/modules/postgres"
   	"github.com/testcontainers/testcontainers-go/wait"
   )
 
   func startPostgres(t *testing.T) (dsn string, stdlibDSN string) {
   	t.Helper()
   	ctx := context.Background()
-  	ctr, err := tcpg.RunContainer(ctx,
-  		testcontainers.WithImage("postgres:16-alpine"),
-  		tcpg.WithDatabase("pustaka"),
-  		tcpg.WithUsername("pustaka"),
-  		tcpg.WithPassword("pustaka"),
+  	ctr, err := postgres.Run(ctx,
+  		"postgres:16-alpine",
+  		postgres.WithDatabase("pustaka"),
+  		postgres.WithUsername("pustaka"),
+  		postgres.WithPassword("pustaka"),
   		testcontainers.WithWaitStrategy(
-  			wait.ForLog("database system is ready to accept connections").
-  				WithOccurrence(2).WithStartupTimeout(60*time.Second)),
+  			wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second)),
   	)
   	require.NoError(t, err)
   	t.Cleanup(func() { _ = ctr.Terminate(ctx) })
@@ -809,9 +813,9 @@ The tasks below were drafted before this review pass. Apply every item:
   }
   ```
 
-- [ ] **Step 2: Run the test, expect FAIL.** Run `cd backend && go test ./db/migrations/...`. Expected FAIL: `go test` errors because `000001_init.up.sql`/`.down.sql` do not exist yet (`migrate.New` returns "no migration found" / file source error), so the test cannot run the schema.
+- [ ] **Step 3: Run the test, expect FAIL.** Run `cd backend && go test ./db/migrations/...`. Expected FAIL: `go test` errors because `000001_init.up.sql`/`.down.sql` do not exist yet (`migrate.New` returns "no migration found" / file source error), so the test cannot run the schema.
 
-- [ ] **Step 3: Write the up migration.** Create `backend/db/migrations/000001_init.up.sql` with the exact contract schema:
+- [ ] **Step 4: Write the up migration.** Create `backend/db/migrations/000001_init.up.sql` with the exact contract schema:
   ```sql
   CREATE TABLE web_user (
       id             VARCHAR(36)  PRIMARY KEY,
@@ -847,14 +851,14 @@ The tasks below were drafted before this review pass. Apply every item:
   CREATE INDEX idx_session_token ON session (refresh_token_hash);
   ```
 
-- [ ] **Step 4: Write the down migration.** Create `backend/db/migrations/000001_init.down.sql` (drop in reverse FK order):
+- [ ] **Step 5: Write the down migration.** Create `backend/db/migrations/000001_init.down.sql` (drop in reverse FK order):
   ```sql
   DROP TABLE IF EXISTS session;
   DROP TABLE IF EXISTS email_verification;
   DROP TABLE IF EXISTS web_user;
   ```
 
-- [ ] **Step 5: Write `sqlc.yaml`.** Create `backend/sqlc.yaml` so Task 6 can generate the queries package per the contract (engine postgresql, pgx/v5, JSON tags, pointers for nullables):
+- [ ] **Step 6: Write `sqlc.yaml`.** Create `backend/sqlc.yaml` (this is the ONLY place `sqlc.yaml` is created) so Task 6 can generate the queries package per the contract (engine postgresql, pgx/v5, JSON tags, pointers for nullables):
   ```yaml
   version: "2"
   sql:
@@ -870,9 +874,9 @@ The tasks below were drafted before this review pass. Apply every item:
           emit_pointers_for_null_types: true
   ```
 
-- [ ] **Step 6: Run the test, expect PASS.** Run `cd backend && go test ./db/migrations/...`. Expected PASS: container starts, `Up` creates all three tables, every asserted column/index/CHECK is found, and `Down` drops the tables so the final counts are 0. Also run `cd backend && go vet ./db/...` and confirm it is clean.
+- [ ] **Step 7: Run the test, expect PASS.** Run `cd backend && go test ./db/migrations/...`. Expected PASS: container starts, `Up` creates all three tables, every asserted column/index/CHECK is found, and `Down` drops the tables so the final counts are 0. Also confirm the Task 3 store test still passes against the real migration: `cd backend && go test ./internal/adapter/store/...` (its `RunMigrations` assertion now exercises the init schema rather than the deleted smoke table — update that store test if it still asserts a `smoke` table). Also run `cd backend && go vet ./db/...` and confirm it is clean.
 
-- [ ] **Step 7: Commit.** `cd backend && git add db/migrations sqlc.yaml && git commit -m "feat: add init migration and sqlc config"` (no `Co-Authored-By` trailer).
+- [ ] **Step 8: Commit.** `cd backend && git add db/migrations sqlc.yaml && git commit -m "feat: add init migration and sqlc config"` (no `Co-Authored-By` trailer).
 
 ---
 
@@ -888,9 +892,9 @@ The tasks below were drafted before this review pass. Apply every item:
 - Test: `backend/internal/adapter/store/store_test.go`
 
 **Interfaces:**
-- Consumes: the schema + `sqlc.yaml` from **Task 5**; the `domain` package from Cluster A — exact types/signatures used here: `domain.Store` (the interface to implement), `domain.User`, `domain.EmailVerification`, `domain.Session`, `domain.CreateUserParams`, `domain.CreateEmailVerificationParams`, `domain.CreateSessionParams`, and `domain.ErrNotFound`, `domain.ErrConflict`.
+- Consumes: the schema + `sqlc.yaml` from **Task 5**; the `domain` package from **Task 9** — exact types/signatures used here: `domain.Store` (the interface to implement), `domain.User`, `domain.EmailVerification`, `domain.Session`, `domain.CreateUserParams`, `domain.CreateEmailVerificationParams`, `domain.CreateSessionParams`, and `domain.ErrNotFound`, `domain.ErrConflict`.
 - Produces:
-  - `func New(pool *pgxpool.Pool) *Store` and `*Store` implementing every `domain.Store` method, including `ExecTx(ctx context.Context, fn func(domain.Store) error) error`. Task 6's `New` constructor signature is what `cmd/server/main.go` (Cluster D) wires up.
+  - `func New(pool *pgxpool.Pool) *Store` and `*Store` implementing every `domain.Store` method, including `ExecTx(ctx context.Context, fn func(domain.Store) error) error`. Task 6's `New` constructor signature is what the shared test harness (Task 11) and `cmd/server/main.go` (Task 22) wire up.
   - Named sqlc queries that generate `*sqlc.Queries` with method set: `CreateUser`, `GetUserByEmail`, `GetUserByUsername`, `GetUserByID`, `SetUserEmailVerified`, `CreateEmailVerification`, `GetActiveEmailVerification`, `IncrementVerificationAttempts`, `ConsumeEmailVerification`, `DeleteEmailVerificationsByUser`, `CreateSession`, `GetSessionByTokenHash`, `RevokeSession`, `RevokeAllUserSessions`.
 
 - [ ] **Step 1: Write `db/queries/user.sql`.** Named queries backing the user-facing `domain.Store` methods. Create `backend/db/queries/user.sql`:
@@ -921,7 +925,7 @@ The tasks below were drafted before this review pass. Apply every item:
   WHERE id = $1;
   ```
 
-- [ ] **Step 2: Write `db/queries/verification.sql`.** Note `GetActiveEmailVerification` = newest unconsumed, and `IncrementVerificationAttempts` returns the new count. Create `backend/db/queries/verification.sql`:
+- [ ] **Step 2: Write `db/queries/verification.sql`.** Note `GetActiveEmailVerification` = newest unconsumed, and `IncrementVerificationAttempts` does the increment and RETURNS the new count atomically (one statement). Create `backend/db/queries/verification.sql`:
   ```sql
   -- name: CreateEmailVerification :one
   INSERT INTO email_verification (id, user_id, code_hash, expires_at)
@@ -982,7 +986,7 @@ The tasks below were drafted before this review pass. Apply every item:
   ```
   Then run `cd backend && make sqlc` (sqlc is proto-pinned per machine convention). This writes `backend/internal/adapter/store/sqlc/{db.go,models.go,user.sql.go,verification.sql.go,session.sql.go}`. Do NOT hand-edit those files. Confirm `cd backend && go build ./internal/adapter/store/sqlc/...` compiles.
 
-- [ ] **Step 5: Write the failing `Store` test.** Covers the CreateUser→GetUserByEmail roundtrip, `ErrNotFound` mapping, and `ExecTx` rollback-on-error. Create `backend/internal/adapter/store/store_test.go`:
+- [ ] **Step 5: Write the failing `Store` test.** Covers the CreateUser→GetUserByEmail roundtrip, `ErrNotFound` mapping, and `ExecTx` rollback-on-error. It stands up Postgres via `postgres.Run` and applies the schema via `store.RunMigrations` (Task 3). Create `backend/internal/adapter/store/store_test.go`:
   ```go
   package store_test
 
@@ -992,14 +996,11 @@ The tasks below were drafted before this review pass. Apply every item:
   	"testing"
   	"time"
 
-  	"github.com/golang-migrate/migrate/v4"
-  	_ "github.com/golang-migrate/migrate/v4/database/postgres"
-  	_ "github.com/golang-migrate/migrate/v4/source/file"
   	"github.com/google/uuid"
   	"github.com/jackc/pgx/v5/pgxpool"
   	"github.com/stretchr/testify/require"
   	"github.com/testcontainers/testcontainers-go"
-  	tcpg "github.com/testcontainers/testcontainers-go/modules/postgres"
+  	"github.com/testcontainers/testcontainers-go/modules/postgres"
   	"github.com/testcontainers/testcontainers-go/wait"
 
   	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
@@ -1009,14 +1010,13 @@ The tasks below were drafted before this review pass. Apply every item:
   func newStore(t *testing.T) *store.Store {
   	t.Helper()
   	ctx := context.Background()
-  	ctr, err := tcpg.RunContainer(ctx,
-  		testcontainers.WithImage("postgres:16-alpine"),
-  		tcpg.WithDatabase("pustaka"),
-  		tcpg.WithUsername("pustaka"),
-  		tcpg.WithPassword("pustaka"),
+  	ctr, err := postgres.Run(ctx,
+  		"postgres:16-alpine",
+  		postgres.WithDatabase("pustaka"),
+  		postgres.WithUsername("pustaka"),
+  		postgres.WithPassword("pustaka"),
   		testcontainers.WithWaitStrategy(
-  			wait.ForLog("database system is ready to accept connections").
-  				WithOccurrence(2).WithStartupTimeout(60*time.Second)),
+  			wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second)),
   	)
   	require.NoError(t, err)
   	t.Cleanup(func() { _ = ctr.Terminate(ctx) })
@@ -1024,9 +1024,7 @@ The tasks below were drafted before this review pass. Apply every item:
   	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
   	require.NoError(t, err)
 
-  	m, err := migrate.New("file://../../../db/migrations", "pgx5://"+dsn[len("postgres://"):])
-  	require.NoError(t, err)
-  	require.NoError(t, m.Up())
+  	require.NoError(t, store.RunMigrations(dsn))
 
   	pool, err := pgxpool.New(ctx, dsn)
   	require.NoError(t, err)
@@ -1087,7 +1085,7 @@ The tasks below were drafted before this review pass. Apply every item:
 
 - [ ] **Step 6: Run the test, expect FAIL.** Run `cd backend && go test ./internal/adapter/store/...`. Expected FAIL: compile error — package `store` has no `Store` type, no `New`, and no `domain.Store` method implementations yet.
 
-- [ ] **Step 7: Write the `Store` wrapper.** It wraps `*sqlc.Queries` + `*pgxpool.Pool`, maps sqlc rows ↔ domain entities, maps `pgx.ErrNoRows`→`domain.ErrNotFound` and unique-violation (`23505`)→`domain.ErrConflict`, and implements `ExecTx` via `pool.BeginTx` + `q.WithTx` (commit on nil error, rollback otherwise). Create `backend/internal/adapter/store/store.go`:
+- [ ] **Step 7: Write the `Store` wrapper.** It wraps `*sqlc.Queries` + `*pgxpool.Pool`, maps sqlc rows ↔ domain entities, maps `pgx.ErrNoRows`→`domain.ErrNotFound` and unique-violation (`23505`)→`domain.ErrConflict`, and implements `ExecTx` via `pool.BeginTx` + `q.WithTx` (commit on nil error, rollback otherwise). Create `backend/internal/adapter/store/store.go`. The import block MUST include `github.com/jackc/pgx/v5/pgtype` (sqlc with `sql_package: pgx/v5` emits `pgtype.Timestamptz` for `TIMESTAMPTZ` columns and `*pgtype.Timestamptz` for nullable ones, matching the row-mapper code below):
   ```go
   package store
 
@@ -1098,6 +1096,7 @@ The tasks below were drafted before this review pass. Apply every item:
 
   	"github.com/jackc/pgx/v5"
   	"github.com/jackc/pgx/v5/pgconn"
+  	"github.com/jackc/pgx/v5/pgtype"
   	"github.com/jackc/pgx/v5/pgxpool"
 
   	"github.com/zulkhair/pustaka/backend/internal/adapter/store/sqlc"
@@ -1303,7 +1302,6 @@ The tasks below were drafted before this review pass. Apply every item:
 
   var _ domain.Store = (*Store)(nil)
   ```
-  Add the `pgtype` import used by `tstamp`/`toUser`: in the import block add `"github.com/jackc/pgx/v5/pgtype"`. (sqlc with `sql_package: pgx/v5` emits `pgtype.Timestamptz` for `TIMESTAMPTZ` columns and `*pgtype.Timestamptz` for nullable ones, matching the row-mapper code above.)
 
 - [ ] **Step 8: Run the test, expect PASS.** Run `cd backend && go test ./internal/adapter/store/...`. Expected PASS: the roundtrip returns alice, the missing-email lookup yields `domain.ErrNotFound`, and after `ExecTx` returns the sentinel error the inserted user is absent (rollback confirmed). Run `cd backend && go vet ./internal/adapter/store/...` and confirm it is clean.
 
@@ -1603,6 +1601,8 @@ The tasks below were drafted before this review pass. Apply every item:
 
 - [ ] **Step 5: Commit.** `cd backend && git add internal/pkg/jwt && git commit -m "feat: add JWT access tokens and opaque refresh token generation"` (no `Co-Authored-By` trailer).
 
+---
+
 ### Task 9: Domain entities, ports & sentinel errors
 
 **Files:**
@@ -1620,7 +1620,7 @@ The tasks below were drafted before this review pass. Apply every item:
   - Params: `CreateUserParams`, `CreateEmailVerificationParams`, `CreateSessionParams`.
   - Role consts: `RoleAdmin = "admin"`, `RoleUser = "user"`.
   - Ports: `Mailer` interface, `Store` interface.
-  - Sentinel errors: `ErrNotFound`, `ErrConflict`, `ErrInvalidCredentials`, `ErrEmailNotVerified`, `ErrInvalidCode`, `ErrCodeExpired`, `ErrTooManyAttempts`, `ErrResendCooldown`, `ErrUnauthorized`, `ErrForbidden`.
+  - Sentinel errors: `ErrNotFound`, `ErrConflict`, `ErrInvalidCredentials`, `ErrEmailNotVerified`, `ErrInvalidCode`, `ErrCodeExpired`, `ErrTooManyAttempts`, `ErrValidation`, `ErrResendCooldown` (internal-only — never surfaced to HTTP), `ErrUnauthorized`, `ErrForbidden`.
 
 Steps:
 
@@ -1643,6 +1643,7 @@ Steps:
   		"ErrInvalidCode":        domain.ErrInvalidCode,
   		"ErrCodeExpired":        domain.ErrCodeExpired,
   		"ErrTooManyAttempts":    domain.ErrTooManyAttempts,
+  		"ErrValidation":         domain.ErrValidation,
   		"ErrResendCooldown":     domain.ErrResendCooldown,
   		"ErrUnauthorized":       domain.ErrUnauthorized,
   		"ErrForbidden":          domain.ErrForbidden,
@@ -1678,9 +1679,13 @@ Steps:
   	ErrInvalidCode        = errors.New("invalid code")
   	ErrCodeExpired        = errors.New("code expired")
   	ErrTooManyAttempts    = errors.New("too many attempts")
-  	ErrResendCooldown     = errors.New("resend cooldown active")
-  	ErrUnauthorized       = errors.New("unauthorized")
-  	ErrForbidden          = errors.New("forbidden")
+  	ErrValidation         = errors.New("validation failed")
+  	// ErrResendCooldown is internal-only: ResendVerification returns it so the
+  	// service layer can enforce the cooldown, but the handler swallows it into a
+  	// generic 200 (never surfaced to the client).
+  	ErrResendCooldown = errors.New("resend cooldown active")
+  	ErrUnauthorized   = errors.New("unauthorized")
+  	ErrForbidden      = errors.New("forbidden")
   )
   ```
 
@@ -1810,10 +1815,10 @@ Steps:
 **Interfaces:**
 - Consumes:
   - `domain.Mailer` — `SendVerificationCode(ctx context.Context, toEmail, code string) error` (Task 9). Both types must satisfy this interface.
-  - `config.Config` fields `ResendAPIKey string`, `MailFrom string` (Cluster A).
+  - `config.Config` fields `ResendAPIKey string`, `MailFrom string` (Task 2).
 - Produces (later tasks rely on these VERBATIM):
   - `func NewResendMailer(cfg config.Config) *ResendMailer` — production `domain.Mailer`.
-  - `mail.MockMailer` with exported fields `LastEmail string`, `LastCode string`, and `Sends []MockSend` (each `MockSend{Email, Code string}`); `func NewMockMailer() *MockMailer`. Used by Tasks 11 and 12 instead of real email.
+  - `mail.MockMailer` with exported fields `LastEmail string`, `LastCode string`, and `Sends []MockSend` (each `MockSend{Email, Code string}`); `func NewMockMailer() *MockMailer`; `func (m *MockMailer) CodeFor(email string) (string, bool)`. Used by the test harness (Task 11) and the E2E (Task 22) instead of real email.
 
 Steps:
 
@@ -1842,6 +1847,12 @@ Steps:
   	require.Len(t, mock.Sends, 2)
   	require.Equal(t, "a@example.com", mock.Sends[0].Email)
   	require.Equal(t, "111111", mock.Sends[0].Code)
+
+  	code, ok := mock.CodeFor("a@example.com")
+  	require.True(t, ok)
+  	require.Equal(t, "111111", code)
+  	_, ok = mock.CodeFor("missing@example.com")
+  	require.False(t, ok)
   }
   ```
 
@@ -1945,6 +1956,16 @@ Steps:
   	m.Sends = append(m.Sends, MockSend{Email: toEmail, Code: code})
   	return nil
   }
+
+  // CodeFor returns the most recent code captured for the given email, if any.
+  func (m *MockMailer) CodeFor(email string) (string, bool) {
+  	for i := len(m.Sends) - 1; i >= 0; i-- {
+  		if m.Sends[i].Email == email {
+  			return m.Sends[i].Code, true
+  		}
+  	}
+  	return "", false
+  }
   ```
 
 - [ ] **Step 5: Write `resend.go`.** Create `backend/internal/adapter/mail/resend.go`. POSTs to `https://api.resend.com/emails` (overridable via `BaseURL` for tests), sets `Authorization: Bearer <key>` + `Content-Type: application/json`, sends `{from, to, subject, html, text}` containing the code, and errors on non-2xx:
@@ -2032,36 +2053,327 @@ Steps:
 
 ---
 
-### Task 11: AuthService.Register + register handler
+## Cluster C — Shared test harness & registration/verification (Tasks 11–14)
+
+### Task 11: Shared test harness (`internal/testsupport` + httpapi harness)
+
+**Files:**
+- Create `backend/internal/testsupport/testsupport.go`
+- Create `backend/internal/adapter/httpapi/harness_test.go`
+- Test (smoke): `backend/internal/testsupport/testsupport_test.go`
+
+**Interfaces:**
+- Consumes:
+  - `store.New(pool *pgxpool.Pool) *store.Store` and `store.RunMigrations(databaseURL string) error` (Task 6 / Task 3).
+  - `mail.NewMockMailer() *mail.MockMailer` (Task 10).
+  - `auth.New(store domain.Store, mailer domain.Mailer, cfg config.Config) *auth.Service` and `httpapi.NewAuthHandler` / `httpapi.BuildApp` / `httpapi.RouterDeps` (Tasks 12 + 19/22). Because `BuildApp`/router land later, the httpapi harness `newTestApp` is authored here but its smoke assertion is exercised once `BuildApp` exists; the `internal/testsupport` package (DB-only) is fully testable now.
+  - testcontainers `postgres.Run` + `container.ConnectionString` (Task 3 pattern), `github.com/jackc/pgx/v5/pgxpool`.
+- Produces (EVERY later handler/service/E2E test uses THESE helpers — no ad-hoc `newTestStore`/mocks):
+  - `func NewTestStore(t *testing.T) (*store.Store, func())` — boots a testcontainers Postgres, runs `store.RunMigrations`, returns the concrete `*store.Store` plus a cleanup func.
+  - `func BackdateVerification(t *testing.T, pool *pgxpool.Pool, userID string, ts time.Time)` — sets `email_verification.created_at` for a user (used by resend cooldown tests).
+  - In `httpapi` test package: `type testApp` exposing `app *fiber.App`, `store *store.Store`, `mailer *mail.MockMailer`; `func newTestApp(t *testing.T) *testApp`; helpers `doJSON(method, path, body)`, `doRaw(method, path, raw)`, `seedUnverifiedUser`, `seedVerifiedUser`, `seedUnverifiedUserWithPassword`.
+
+Steps:
+
+- [ ] **Step 1: Write the smoke test for `internal/testsupport`.** Create `backend/internal/testsupport/testsupport_test.go`. It asserts `NewTestStore` returns a working store (a CreateUser/GetUserByEmail roundtrip) and that `BackdateVerification` moves `created_at` into the past:
+  ```go
+  package testsupport_test
+
+  import (
+  	"context"
+  	"testing"
+  	"time"
+
+  	"github.com/google/uuid"
+  	"github.com/stretchr/testify/require"
+
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/testsupport"
+  )
+
+  func TestNewTestStoreRoundtrip(t *testing.T) {
+  	st, cleanup := testsupport.NewTestStore(t)
+  	defer cleanup()
+  	ctx := context.Background()
+
+  	u, err := st.CreateUser(ctx, domain.CreateUserParams{
+  		ID: uuid.NewString(), Username: "smoke", Email: "smoke@example.com",
+  		PasswordHash: "x", Role: domain.RoleUser,
+  	})
+  	require.NoError(t, err)
+
+  	got, err := st.GetUserByEmail(ctx, "smoke@example.com")
+  	require.NoError(t, err)
+  	require.Equal(t, u.ID, got.ID)
+
+  	_, err = st.CreateEmailVerification(ctx, domain.CreateEmailVerificationParams{
+  		ID: uuid.NewString(), UserID: u.ID, CodeHash: "h",
+  		ExpiresAt: time.Now().Add(15 * time.Minute),
+  	})
+  	require.NoError(t, err)
+
+  	testsupport.BackdateVerification(t, st.Pool(), u.ID, time.Now().Add(-10*time.Minute))
+
+  	ev, err := st.GetActiveEmailVerification(ctx, u.ID)
+  	require.NoError(t, err)
+  	require.WithinDuration(t, time.Now().Add(-10*time.Minute), ev.CreatedAt, time.Minute)
+  }
+  ```
+
+- [ ] **Step 2: Run the smoke test and confirm it FAILS.** Run `cd backend && go test ./internal/testsupport/...`. Expected FAIL: compile error — `undefined: testsupport.NewTestStore`, `undefined: testsupport.BackdateVerification`, and `(*store.Store).Pool` is undefined.
+
+- [ ] **Step 3: Expose the pool on `*store.Store` for test backdating.** Add a small accessor to `backend/internal/adapter/store/store.go` (kept tiny; used only by the harness):
+  ```go
+  // Pool returns the underlying pgx pool (used by the shared test harness).
+  func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+  ```
+
+- [ ] **Step 4: Write `internal/testsupport/testsupport.go`.** Create it:
+  ```go
+  package testsupport
+
+  import (
+  	"context"
+  	"testing"
+  	"time"
+
+  	"github.com/jackc/pgx/v5/pgxpool"
+  	"github.com/stretchr/testify/require"
+  	"github.com/testcontainers/testcontainers-go"
+  	"github.com/testcontainers/testcontainers-go/modules/postgres"
+  	"github.com/testcontainers/testcontainers-go/wait"
+
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
+  )
+
+  // NewTestStore boots an ephemeral Postgres, applies migrations, and returns a
+  // concrete *store.Store plus a cleanup func. Used by every DB-backed test.
+  func NewTestStore(t *testing.T) (*store.Store, func()) {
+  	t.Helper()
+  	ctx := context.Background()
+  	ctr, err := postgres.Run(ctx,
+  		"postgres:16-alpine",
+  		postgres.WithDatabase("pustaka"),
+  		postgres.WithUsername("pustaka"),
+  		postgres.WithPassword("pustaka"),
+  		testcontainers.WithWaitStrategy(
+  			wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second)),
+  	)
+  	require.NoError(t, err)
+
+  	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
+  	require.NoError(t, err)
+  	require.NoError(t, store.RunMigrations(dsn))
+
+  	pool, err := pgxpool.New(ctx, dsn)
+  	require.NoError(t, err)
+
+  	st := store.New(pool)
+  	cleanup := func() {
+  		pool.Close()
+  		_ = ctr.Terminate(ctx)
+  	}
+  	return st, cleanup
+  }
+
+  // BackdateVerification rewrites email_verification.created_at for a user, so
+  // resend-cooldown tests can simulate a stale verification row.
+  func BackdateVerification(t *testing.T, pool *pgxpool.Pool, userID string, ts time.Time) {
+  	t.Helper()
+  	_, err := pool.Exec(context.Background(),
+  		`UPDATE email_verification SET created_at = $2 WHERE user_id = $1`, userID, ts)
+  	require.NoError(t, err)
+  }
+  ```
+
+- [ ] **Step 5: Run the smoke test and confirm it PASSES.** Run `cd backend && go test ./internal/testsupport/...`. Expected PASS: roundtrip succeeds and the backdated `created_at` is ~10m in the past. Run `cd backend && go vet ./internal/testsupport/...` (clean).
+
+- [ ] **Step 6: Write the httpapi test harness.** Create `backend/internal/adapter/httpapi/harness_test.go`. It builds a real Fiber app over a testcontainers-backed store + `MockMailer`, and exposes JSON helpers + seeders that every later handler/E2E test reuses. (It depends on `httpapi.BuildApp`/`NewAuthHandler` from Tasks 19/22; the file compiles once those exist — until then, the handler-cluster tasks that consume `newTestApp` will note the dependency.)
+  ```go
+  package httpapi_test
+
+  import (
+  	"bytes"
+  	"context"
+  	"encoding/json"
+  	"io"
+  	"net/http"
+  	"net/http/httptest"
+  	"strings"
+  	"testing"
+  	"time"
+
+  	"github.com/google/uuid"
+  	"github.com/stretchr/testify/require"
+
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/mail"
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
+  	"github.com/zulkhair/pustaka/backend/internal/app/auth"
+  	"github.com/zulkhair/pustaka/backend/internal/config"
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
+  	"github.com/zulkhair/pustaka/backend/internal/testsupport"
+
+  	"github.com/gofiber/fiber/v2"
+  )
+
+  const harnessSecret = "harness-secret-0123456789"
+
+  type testApp struct {
+  	app    *fiber.App
+  	store  *store.Store
+  	mailer *mail.MockMailer
+  }
+
+  func newTestApp(t *testing.T) *testApp {
+  	t.Helper()
+  	st, cleanup := testsupport.NewTestStore(t)
+  	t.Cleanup(cleanup)
+
+  	mailer := mail.NewMockMailer()
+  	cfg := config.Config{
+  		JWTSecret:      harnessSecret,
+  		AccessTTL:      15 * time.Minute,
+  		RefreshTTL:     720 * time.Hour,
+  		BcryptCost:     4,
+  		CodeTTL:        15 * time.Minute,
+  		MaxAttempts:    5,
+  		ResendCooldown: 60 * time.Second,
+  	}
+  	svc := auth.New(st, mailer, cfg)
+  	app := httpapi.BuildApp(httpapi.RouterDeps{
+  		Auth:      httpapi.NewAuthHandler(svc),
+  		Pinger:    st.Pool(),
+  		JWTSecret: cfg.JWTSecret,
+  	})
+  	return &testApp{app: app, store: st, mailer: mailer}
+  }
+
+  // doJSON marshals body and POSTs/GETs it, returning the *http.Response.
+  func doJSON(t *testing.T, ta *testApp, method, path string, body any) *http.Response {
+  	t.Helper()
+  	raw, err := json.Marshal(body)
+  	require.NoError(t, err)
+  	req := httptest.NewRequest(method, path, bytes.NewReader(raw))
+  	req.Header.Set("Content-Type", "application/json")
+  	resp, err := ta.app.Test(req, -1)
+  	require.NoError(t, err)
+  	return resp
+  }
+
+  // doJSONBody is doJSON plus a decoded envelope map.
+  func doJSONBody(t *testing.T, ta *testApp, method, path string, body any) (*http.Response, map[string]any) {
+  	t.Helper()
+  	resp := doJSON(t, ta, method, path, body)
+  	b, _ := io.ReadAll(resp.Body)
+  	var env map[string]any
+  	require.NoError(t, json.Unmarshal(b, &env), "body: %s", string(b))
+  	return resp, env
+  }
+
+  // doRaw sends an arbitrary (possibly invalid-JSON) body.
+  func doRaw(t *testing.T, ta *testApp, method, path, raw string) *http.Response {
+  	t.Helper()
+  	req := httptest.NewRequest(method, path, strings.NewReader(raw))
+  	req.Header.Set("Content-Type", "application/json")
+  	resp, err := ta.app.Test(req, -1)
+  	require.NoError(t, err)
+  	return resp
+  }
+
+  // seedUnverifiedUser inserts an unverified user plus a fresh verification row.
+  func seedUnverifiedUser(t *testing.T, st *store.Store, username, email string) domain.User {
+  	t.Helper()
+  	ctx := context.Background()
+  	u, err := st.CreateUser(ctx, domain.CreateUserParams{
+  		ID: uuid.NewString(), Username: username, Email: email,
+  		PasswordHash: "x", Role: domain.RoleUser,
+  	})
+  	require.NoError(t, err)
+  	_, err = st.CreateEmailVerification(ctx, domain.CreateEmailVerificationParams{
+  		ID: uuid.NewString(), UserID: u.ID, CodeHash: "seed-hash",
+  		ExpiresAt: time.Now().Add(15 * time.Minute),
+  	})
+  	require.NoError(t, err)
+  	return u
+  }
+
+  // seedUnverifiedUserWithPassword inserts an unverified user with a known bcrypt password.
+  func seedUnverifiedUserWithPassword(t *testing.T, st *store.Store, username, email, pw string) domain.User {
+  	t.Helper()
+  	ctx := context.Background()
+  	ph, err := hash.HashPassword(pw, 4)
+  	require.NoError(t, err)
+  	u, err := st.CreateUser(ctx, domain.CreateUserParams{
+  		ID: uuid.NewString(), Username: username, Email: email,
+  		PasswordHash: ph, Role: domain.RoleUser,
+  	})
+  	require.NoError(t, err)
+  	return u
+  }
+
+  // seedVerifiedUser inserts a verified user with a known bcrypt password.
+  func seedVerifiedUser(t *testing.T, st *store.Store, username, email, pw string) domain.User {
+  	t.Helper()
+  	ctx := context.Background()
+  	u := seedUnverifiedUserWithPassword(t, st, username, email, pw)
+  	require.NoError(t, st.SetUserEmailVerified(ctx, u.ID))
+  	u.EmailVerified = true
+  	return u
+  }
+  ```
+
+- [ ] **Step 7: Boot smoke for `newTestApp` (health responds).** Add a smoke test to `harness_test.go` proving the app boots and `/api/health` answers 200. This is the harness task's "test" (a compile/smoke check):
+  ```go
+  func TestHarnessBootsAndHealthResponds(t *testing.T) {
+  	ta := newTestApp(t)
+  	req := httptest.NewRequest("GET", "/api/health", nil)
+  	resp, err := ta.app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 200, resp.StatusCode)
+  }
+  ```
+  Run `cd backend && go test ./internal/adapter/httpapi/... -run TestHarnessBootsAndHealthResponds`. EXPECT (when run after Tasks 12/19/22 land): PASS. If `BuildApp`/handlers are not yet present in the working tree, state the observed compile failure explicitly and revisit after the consuming tasks.
+
+- [ ] **Step 8: Vet and commit.** Run `cd backend && go vet ./internal/testsupport/... ./internal/adapter/httpapi/...` (clean for the DB-only package), then `git add backend/internal/testsupport backend/internal/adapter/store/store.go backend/internal/adapter/httpapi/harness_test.go && git commit -m "test: add shared testcontainers store + httpapi harness"` (no `Co-Authored-By` trailer).
+
+---
+
+### Task 12: AuthService.Register + register handler + `mapAuthError`
 
 **Files:**
 - Create `backend/internal/app/auth/service.go`
 - Create `backend/internal/adapter/httpapi/auth_handler.go`
+- Create `backend/internal/adapter/httpapi/errors.go` (defines `mapAuthError` ONCE)
 - Test `backend/internal/app/auth/register_test.go`
+- Test `backend/internal/adapter/httpapi/errors_test.go`
 
 **Interfaces:**
 - Consumes:
-  - `domain.Store` and its methods `ExecTx`, `GetUserByEmail`, `GetUserByUsername`, `CreateUser`, `CreateEmailVerification` (Task 9); sentinel `domain.ErrConflict`, `domain.ErrNotFound`; `domain.CreateUserParams`, `domain.CreateEmailVerificationParams`; `domain.RoleUser` (Task 9).
-  - `domain.Mailer.SendVerificationCode` (Task 9); `mail.NewMockMailer()` in tests (Task 10).
-  - `config.Config` fields `BcryptCost`, `CodeTTL` (Cluster A).
-  - `hash.HashPassword(pw string, cost int) (string, error)`, `hash.GenerateNumericCode(n int) (string, error)`, `hash.HashCode(code string, cost int) (string, error)` (Cluster B `pkg/hash`).
-  - `httpapi.OK`, `httpapi.Fail` (Cluster D `response.go`); `httpapi.RegisterReq{Username, Email, Password string}` request DTO (Cluster D). The error→HTTP map helper `httpapi.mapError` is defined once in Cluster D; this task's handler **calls** it, does not redefine it.
+  - `domain.Store` and its methods `ExecTx`, `GetUserByEmail`, `GetUserByUsername`, `CreateUser`, `CreateEmailVerification` (Task 9); sentinels `domain.ErrConflict`, `domain.ErrNotFound`, `domain.ErrValidation`; `domain.CreateUserParams`, `domain.CreateEmailVerificationParams`; `domain.RoleUser` (Task 9).
+  - `domain.Mailer.SendVerificationCode` (Task 9); the shared test harness `testsupport.NewTestStore` + `mail.NewMockMailer()` in tests (Tasks 10–11).
+  - `config.Config` fields `BcryptCost`, `CodeTTL` (Task 2).
+  - `hash.HashPassword`, `hash.GenerateNumericCode`, `hash.HashCode` (Task 7).
+  - `httpapi.OK`, `httpapi.Fail` (Task 19 `response.go`); `httpapi.RegisterReq{Username, Email, Password string}` request DTO (this task).
 - Produces (later tasks rely on these VERBATIM):
   - `type Service struct { store domain.Store; mailer domain.Mailer; cfg config.Config }`
   - `func New(store domain.Store, mailer domain.Mailer, cfg config.Config) *Service`
-  - `type RegisterInput struct { Username, Email, Password string }`
+  - `type RegisterInput struct { Username, Email, Password string }`; also the shared `VerifyInput`, `LoginInput`, `Tokens` types and `normalizeEmail` helper.
   - `func (s *Service) Register(ctx context.Context, in RegisterInput) error`
-  - `type Handler struct { svc *auth.Service }` and `func NewHandler(svc *auth.Service) *Handler` plus `func (h *Handler) Register(c *fiber.Ctx) error` (Task 12 adds `VerifyEmail` to the same `Handler`/`Service`).
+  - `type AuthHandler struct { svc *auth.Service }` and `func NewAuthHandler(svc *auth.Service) *AuthHandler` plus `func (h *AuthHandler) Register(c *fiber.Ctx) error` (later tasks add `VerifyEmail`, `ResendVerification`, `Login`, `Refresh`, `Logout`, `Me` to the same `*AuthHandler`).
+  - `func mapAuthError(c *fiber.Ctx, err error) error` (defined ONCE here; EVERY handler calls it).
 
 Steps:
 
-- [ ] **Step 1: Write the failing test (testcontainers + MockMailer).** Create `backend/internal/app/auth/register_test.go`. Assumes a shared test helper `newTestStore(t)` (provided by Cluster B/D store tests) returning a real `domain.Store` backed by a testcontainers Postgres; if absent, this test stands up its own via the documented store constructor. It asserts a successful register creates an unverified user + a verification row + the mock captured the 6-digit code, and a duplicate email yields `domain.ErrConflict`:
+- [ ] **Step 1: Write the failing service test.** Create `backend/internal/app/auth/register_test.go`. It uses the shared harness `testsupport.NewTestStore`. It asserts a successful register creates an unverified user + a verification row + the mock captured the 6-digit code; a duplicate email yields `domain.ErrConflict`; and validation failures (empty field, bad email, short password) yield `domain.ErrValidation`. Note `cfg.CodeTTL` is set explicitly (no zero value):
   ```go
   package auth_test
 
   import (
   	"context"
   	"testing"
+  	"time"
 
   	"github.com/stretchr/testify/require"
 
@@ -2069,14 +2381,18 @@ Steps:
   	"github.com/zulkhair/pustaka/backend/internal/app/auth"
   	"github.com/zulkhair/pustaka/backend/internal/config"
   	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/testsupport"
   )
 
+  func registerCfg() config.Config {
+  	return config.Config{BcryptCost: 4, CodeTTL: 15 * time.Minute}
+  }
+
   func TestRegisterCreatesUnverifiedUserAndSendsCode(t *testing.T) {
-  	store := newTestStore(t) // shared testcontainers-backed domain.Store helper
+  	store, cleanup := testsupport.NewTestStore(t)
+  	defer cleanup()
   	mock := mail.NewMockMailer()
-  	cfg := config.Config{BcryptCost: 4, CodeTTL: config.Config{}.CodeTTL}
-  	cfg.BcryptCost = 4
-  	svc := auth.New(store, mock, cfg)
+  	svc := auth.New(store, mock, registerCfg())
   	ctx := context.Background()
 
   	err := svc.Register(ctx, auth.RegisterInput{
@@ -2101,9 +2417,9 @@ Steps:
   }
 
   func TestRegisterDuplicateEmailConflict(t *testing.T) {
-  	store := newTestStore(t)
-  	cfg := config.Config{BcryptCost: 4}
-  	svc := auth.New(store, mail.NewMockMailer(), cfg)
+  	store, cleanup := testsupport.NewTestStore(t)
+  	defer cleanup()
+  	svc := auth.New(store, mail.NewMockMailer(), registerCfg())
   	ctx := context.Background()
 
   	in := auth.RegisterInput{Username: "bob", Email: "bob@example.com", Password: "supersecret"}
@@ -2113,11 +2429,28 @@ Steps:
   	err := svc.Register(ctx, dup)
   	require.ErrorIs(t, err, domain.ErrConflict)
   }
+
+  func TestRegisterValidationErrors(t *testing.T) {
+  	store, cleanup := testsupport.NewTestStore(t)
+  	defer cleanup()
+  	svc := auth.New(store, mail.NewMockMailer(), registerCfg())
+  	ctx := context.Background()
+
+  	cases := []auth.RegisterInput{
+  		{Username: "", Email: "x@example.com", Password: "supersecret"},
+  		{Username: "carol", Email: "not-an-email", Password: "supersecret"},
+  		{Username: "carol", Email: "carol@example.com", Password: "short"},
+  	}
+  	for _, in := range cases {
+  		err := svc.Register(ctx, in)
+  		require.ErrorIs(t, err, domain.ErrValidation)
+  	}
+  }
   ```
 
 - [ ] **Step 2: Run the test and confirm it FAILS.** Run `go test ./internal/app/auth/...`. Expected FAIL: the package does not compile — `undefined: auth.New`, `undefined: auth.RegisterInput`, `undefined: (*auth.Service).Register`.
 
-- [ ] **Step 3: Write `service.go` with `New`, the shared types, and `Register`.** Create `backend/internal/app/auth/service.go`. Validation: non-empty username/email/password, RFC-ish email (`net/mail.ParseAddress`), password length >= 8. Inside `ExecTx`: reject duplicate username/email with `domain.ErrConflict`, hash password, create the user (role `user`, unverified), generate + hash a 6-digit code, create the verification row with `ExpiresAt = now + cfg.CodeTTL`. After the transaction commits, call `mailer.SendVerificationCode`:
+- [ ] **Step 3: Write `service.go` with `New`, the shared types, and `Register`.** Create `backend/internal/app/auth/service.go`. Validation returns `domain.ErrValidation` for empty fields / invalid email (`net/mail.ParseAddress`) / password length < 8. Inside `ExecTx`: reject duplicate username/email with `domain.ErrConflict`, create the user (role `user`, unverified), create the verification row with `ExpiresAt = now + cfg.CodeTTL`. After commit, call `mailer.SendVerificationCode`:
   ```go
   package auth
 
@@ -2176,13 +2509,13 @@ Steps:
   	username := strings.TrimSpace(in.Username)
   	email := normalizeEmail(in.Email)
   	if username == "" || email == "" || in.Password == "" {
-  		return fmt.Errorf("%w: missing required field", domain.ErrInvalidCredentials)
+  		return fmt.Errorf("%w: missing required field", domain.ErrValidation)
   	}
   	if _, err := mail.ParseAddress(email); err != nil {
-  		return fmt.Errorf("%w: invalid email", domain.ErrInvalidCredentials)
+  		return fmt.Errorf("%w: invalid email", domain.ErrValidation)
   	}
   	if len(in.Password) < 8 {
-  		return fmt.Errorf("%w: password too short", domain.ErrInvalidCredentials)
+  		return fmt.Errorf("%w: password too short", domain.ErrValidation)
   	}
 
   	pwHash, err := hash.HashPassword(in.Password, s.cfg.BcryptCost)
@@ -2240,9 +2573,93 @@ Steps:
   }
   ```
 
-- [ ] **Step 4: Run the test and confirm it PASSES.** Run `go test ./internal/app/auth/...`. Expected PASS: `ok  github.com/zulkhair/pustaka/backend/internal/app/auth` — register creates an unverified `user`-role row, an active verification row with a non-empty hash, and the mock recorded a 6-digit code; duplicate email returns `domain.ErrConflict`.
+- [ ] **Step 4: Run the test and confirm it PASSES.** Run `go test ./internal/app/auth/...`. Expected PASS: register creates an unverified `user`-role row + an active verification row + a 6-digit mock code; duplicate email returns `domain.ErrConflict`; validation cases return `domain.ErrValidation`.
 
-- [ ] **Step 5: Write the register handler.** Create `backend/internal/adapter/httpapi/auth_handler.go`. Parse `RegisterReq`, call `svc.Register`, map errors through the shared `mapError` helper (Cluster D), and on success return a generic `httpapi.OK` (enumeration-resistant — no hint whether the email already existed):
+- [ ] **Step 5: Write the `mapAuthError` micro-test.** Create `backend/internal/adapter/httpapi/errors_test.go`. It drives a tiny Fiber app whose handler returns a chosen sentinel through `mapAuthError`, asserting the contract's status table. `ErrResendCooldown` is internal-only and must NOT appear here (handlers swallow it):
+  ```go
+  package httpapi
+
+  import (
+  	"net/http/httptest"
+  	"testing"
+
+  	"github.com/gofiber/fiber/v2"
+  	"github.com/stretchr/testify/require"
+
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  )
+
+  func TestMapAuthError(t *testing.T) {
+  	cases := []struct {
+  		err  error
+  		code int
+  	}{
+  		{domain.ErrConflict, 409},
+  		{domain.ErrInvalidCredentials, 401},
+  		{domain.ErrEmailNotVerified, 401},
+  		{domain.ErrUnauthorized, 401},
+  		{domain.ErrForbidden, 403},
+  		{domain.ErrNotFound, 404},
+  		{domain.ErrInvalidCode, 400},
+  		{domain.ErrCodeExpired, 400},
+  		{domain.ErrValidation, 400},
+  		{domain.ErrTooManyAttempts, 429},
+  		{errSentinelOther, 500},
+  	}
+  	for _, tc := range cases {
+  		app := fiber.New()
+  		app.Get("/x", func(c *fiber.Ctx) error { return mapAuthError(c, tc.err) })
+  		resp, err := app.Test(httptest.NewRequest("GET", "/x", nil), -1)
+  		require.NoError(t, err)
+  		require.Equal(t, tc.code, resp.StatusCode, "err=%v", tc.err)
+  	}
+  }
+
+  var errSentinelOther = fiber.NewError(0, "other") // any non-mapped error -> 500
+  ```
+
+- [ ] **Step 6: Run the micro-test and confirm it FAILS.** Run `go test ./internal/adapter/httpapi/ -run TestMapAuthError`. Expected FAIL: compile error — `undefined: mapAuthError` (and `OK`/`Fail` from `response.go`, which is created in Task 19; if `response.go` is not yet present, this file still fails on `mapAuthError`).
+
+- [ ] **Step 7: Write `errors.go` defining `mapAuthError` once.** Create `backend/internal/adapter/httpapi/errors.go` per the contract table:
+  ```go
+  package httpapi
+
+  import (
+  	"errors"
+
+  	"github.com/gofiber/fiber/v2"
+
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  )
+
+  // mapAuthError translates a domain sentinel into an HTTP status + generic message.
+  // Defined ONCE; every handler calls it. ErrResendCooldown is intentionally absent —
+  // it is internal-only and swallowed by the resend handler into a generic 200.
+  func mapAuthError(c *fiber.Ctx, err error) error {
+  	switch {
+  	case errors.Is(err, domain.ErrConflict):
+  		return Fail(c, fiber.StatusConflict, "conflict")
+  	case errors.Is(err, domain.ErrInvalidCredentials),
+  		errors.Is(err, domain.ErrEmailNotVerified),
+  		errors.Is(err, domain.ErrUnauthorized):
+  		return Fail(c, fiber.StatusUnauthorized, "unauthorized")
+  	case errors.Is(err, domain.ErrForbidden):
+  		return Fail(c, fiber.StatusForbidden, "forbidden")
+  	case errors.Is(err, domain.ErrNotFound):
+  		return Fail(c, fiber.StatusNotFound, "not found")
+  	case errors.Is(err, domain.ErrInvalidCode),
+  		errors.Is(err, domain.ErrCodeExpired),
+  		errors.Is(err, domain.ErrValidation):
+  		return Fail(c, fiber.StatusBadRequest, "bad request")
+  	case errors.Is(err, domain.ErrTooManyAttempts):
+  		return Fail(c, fiber.StatusTooManyRequests, "too many attempts")
+  	default:
+  		return Fail(c, fiber.StatusInternalServerError, "internal error")
+  	}
+  }
+  ```
+
+- [ ] **Step 8: Write the register handler + DTO.** Create `backend/internal/adapter/httpapi/auth_handler.go`. Parse `RegisterReq`, call `svc.Register`, map errors via `mapAuthError`, and on success return a generic `OK(c, nil)` (enumeration-resistant — no nested message, no hint whether the email already existed):
   ```go
   package httpapi
 
@@ -2252,15 +2669,21 @@ Steps:
   	"github.com/zulkhair/pustaka/backend/internal/app/auth"
   )
 
-  type Handler struct {
+  type AuthHandler struct {
   	svc *auth.Service
   }
 
-  func NewHandler(svc *auth.Service) *Handler {
-  	return &Handler{svc: svc}
+  func NewAuthHandler(svc *auth.Service) *AuthHandler {
+  	return &AuthHandler{svc: svc}
   }
 
-  func (h *Handler) Register(c *fiber.Ctx) error {
+  type RegisterReq struct {
+  	Username string `json:"username"`
+  	Email    string `json:"email"`
+  	Password string `json:"password"`
+  }
+
+  func (h *AuthHandler) Register(c *fiber.Ctx) error {
   	var req RegisterReq
   	if err := c.BodyParser(&req); err != nil {
   		return Fail(c, fiber.StatusBadRequest, "invalid request body")
@@ -2270,46 +2693,47 @@ Steps:
   		Email:    req.Email,
   		Password: req.Password,
   	}); err != nil {
-  		return mapError(c, err)
+  		return mapAuthError(c, err)
   	}
-  	return OK(c, fiber.Map{"message": "if the details are valid, a verification code has been sent"})
+  	return OK(c, nil)
   }
   ```
 
-- [ ] **Step 6: Confirm the package compiles and existing tests still PASS.** Run `go vet ./...` (clean) and `go test ./internal/app/auth/... ./internal/adapter/httpapi/...`. Expected PASS for both packages.
+- [ ] **Step 9: Confirm the auth package compiles and tests pass.** Run `go vet ./internal/app/auth/...` (clean) and `go test ./internal/app/auth/...`. Expected PASS. (The `httpapi` package's `mapAuthError` micro-test passes once `response.go` from Task 19 is in the tree; if running before Task 19, note the `OK`/`Fail` dependency explicitly.)
 
-- [ ] **Step 7: Commit.** `git add backend/internal/app/auth backend/internal/adapter/httpapi && git commit -m "feat(auth): add register use-case and handler"` (no `Co-Authored-By` trailer).
+- [ ] **Step 10: Commit.** `git add backend/internal/app/auth backend/internal/adapter/httpapi && git commit -m "feat(auth): add register use-case, handler, and mapAuthError"` (no `Co-Authored-By` trailer).
 
 ---
 
-### Task 12: AuthService.VerifyEmail + verify-email handler
+### Task 13: AuthService.VerifyEmail + verify-email handler (defines `issueTokens`)
 
 **Files:**
-- Modify `backend/internal/app/auth/service.go` (add `VerifyEmail`)
-- Modify `backend/internal/adapter/httpapi/auth_handler.go` (add `VerifyEmail`)
+- Modify `backend/internal/app/auth/service.go` (add `issueTokens` + `VerifyEmail`)
+- Modify `backend/internal/adapter/httpapi/auth_handler.go` (add `VerifyEmail` + DTOs)
 - Test `backend/internal/app/auth/verify_test.go`
 
 **Interfaces:**
 - Consumes:
   - `domain.Store` methods `GetUserByEmail`, `GetActiveEmailVerification`, `IncrementVerificationAttempts`, `ExecTx`, `SetUserEmailVerified`, `ConsumeEmailVerification`, `CreateSession` (Task 9); sentinels `domain.ErrInvalidCode`, `domain.ErrCodeExpired`, `domain.ErrTooManyAttempts`, `domain.ErrNotFound` (Task 9); `domain.CreateSessionParams` (Task 9).
-  - `config.Config` fields `MaxAttempts`, `AccessTTL`, `RefreshTTL`, `JWTSecret` (Cluster A).
-  - `hash.CheckCode(hash, code string) bool`, `hash.HashRefreshToken(raw string) string` (Cluster B `pkg/hash`).
-  - `jwt.GenerateAccess(userID, role, secret string, ttl time.Duration) (string, error)`, `jwt.GenerateRefreshToken() (string, error)` (Cluster B `pkg/jwt`).
-  - `Service`, `New`, `VerifyInput`, `Tokens` (Task 11); `Handler`, `NewHandler`, `mapError`, `httpapi.OK`/`Fail`, `httpapi.VerifyReq{Email, Code string}`, `httpapi.TokensDTO{AccessToken, RefreshToken, ExpiresIn}` (Task 11 + Cluster D).
+  - `config.Config` fields `MaxAttempts`, `AccessTTL`, `RefreshTTL`, `JWTSecret` (Task 2).
+  - `hash.CheckCode`, `hash.HashRefreshToken` (Task 7).
+  - `jwt.GenerateAccess`, `jwt.GenerateRefreshToken` (Task 8).
+  - `Service`, `New`, `VerifyInput`, `Tokens`, `normalizeEmail` (Task 12); `AuthHandler`, `NewAuthHandler`, `mapAuthError`, `httpapi.OK`/`Fail` (Task 12 + Task 19).
 - Produces (later tasks rely on these VERBATIM):
+  - `func (s *Service) issueTokens(ctx context.Context, u domain.User) (Tokens, error)` — defined ONCE here; **reused** by Login (Task 15) and called within Refresh's tx path (Task 16). Login/Refresh must NOT redefine it.
   - `func (s *Service) VerifyEmail(ctx context.Context, in VerifyInput) (Tokens, error)`
-  - `func (h *Handler) VerifyEmail(c *fiber.Ctx) error`
-  - A shared internal helper `func (s *Service) issueTokens(ctx context.Context, u domain.User) (Tokens, error)` — created here, **reused** by Login/Refresh in their cluster (they reference it, do not redefine it).
+  - `func (h *AuthHandler) VerifyEmail(c *fiber.Ctx) error`; DTOs `VerifyReq{Email, Code string}` and `TokensDTO{accessToken, refreshToken, expiresIn}`.
 
 Steps:
 
-- [ ] **Step 1: Write the failing test (testcontainers + MockMailer).** Create `backend/internal/app/auth/verify_test.go`. Register a user (capturing the real code from the mock), then exercise: wrong code increments attempts and returns `domain.ErrInvalidCode`; expired code returns `domain.ErrCodeExpired`; attempts over the cap returns `domain.ErrTooManyAttempts`; correct code verifies the user, returns non-empty `Tokens`, and writes a session row whose `RefreshTokenHash` equals `hash.HashRefreshToken(tokens.RefreshToken)`:
+- [ ] **Step 1: Write the failing test.** Create `backend/internal/app/auth/verify_test.go`. Uses the shared harness (`testsupport.NewTestStore`) and `testsupport.BackdateVerification` for the expiry case. Register a user (capturing the real code from the mock), then exercise: wrong code increments attempts and returns `domain.ErrInvalidCode`; attempts at/over the cap returns `domain.ErrTooManyAttempts`; correct code verifies the user, returns non-empty `Tokens` (`ExpiresIn == 900`), and writes a session row keyed by `hash.HashRefreshToken(tokens.RefreshToken)`:
   ```go
   package auth_test
 
   import (
   	"context"
   	"testing"
+  	"time"
 
   	"github.com/stretchr/testify/require"
 
@@ -2323,10 +2747,10 @@ Steps:
   func verifyTestCfg() config.Config {
   	return config.Config{
   		BcryptCost:  4,
-  		CodeTTL:     15 * 60 * 1e9, // 15m as time.Duration
+  		CodeTTL:     15 * time.Minute,
   		MaxAttempts: 5,
-  		AccessTTL:   15 * 60 * 1e9,
-  		RefreshTTL:  720 * 60 * 60 * 1e9,
+  		AccessTTL:   15 * time.Minute,
+  		RefreshTTL:  720 * time.Hour,
   		JWTSecret:   "test-secret",
   	}
   }
@@ -2343,7 +2767,8 @@ Steps:
   }
 
   func TestVerifyEmailWrongCodeIncrementsAndFails(t *testing.T) {
-  	store := newTestStore(t)
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
   	mock := mail.NewMockMailer()
   	svc := auth.New(store, mock, verifyTestCfg())
   	ctx := context.Background()
@@ -2358,7 +2783,8 @@ Steps:
   }
 
   func TestVerifyEmailCorrectCodeIssuesTokens(t *testing.T) {
-  	store := newTestStore(t)
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
   	mock := mail.NewMockMailer()
   	svc := auth.New(store, mock, verifyTestCfg())
   	ctx := context.Background()
@@ -2379,10 +2805,29 @@ Steps:
   	require.Equal(t, u.ID, sess.UserID)
   }
   ```
+  > This test (and every other `package auth_test` file) relies on a tiny local adapter `newTestStore(t) (*store.Store, func())` defined once in the auth test package that simply calls `testsupport.NewTestStore(t)`. Add it in a shared `auth_helpers_test.go` so the auth tests read cleanly; it must NOT duplicate testcontainers setup — it only forwards to the shared harness.
 
-- [ ] **Step 2: Run the test and confirm it FAILS.** Run `go test ./internal/app/auth/...`. Expected FAIL: the package does not compile — `undefined: (*auth.Service).VerifyEmail`.
+- [ ] **Step 2: Add the auth-package test adapter.** Create `backend/internal/app/auth/auth_helpers_test.go`:
+  ```go
+  package auth_test
 
-- [ ] **Step 3: Add `issueTokens` and `VerifyEmail` to `service.go`.** Append to `backend/internal/app/auth/service.go`. Order per contract: lookup user (not found → `ErrInvalidCode`, enumeration-safe); fetch active verification (none → `ErrInvalidCode`); expired → `ErrCodeExpired`; attempts at/over cap → `ErrTooManyAttempts`; constant-time `CheckCode` — wrong → increment then `ErrInvalidCode`; right → `ExecTx` { `SetUserEmailVerified`, `ConsumeEmailVerification`, `CreateSession` } and return `Tokens`:
+  import (
+  	"testing"
+
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
+  	"github.com/zulkhair/pustaka/backend/internal/testsupport"
+  )
+
+  // newTestStore forwards to the shared harness so every auth test uses the same
+  // testcontainers-backed store (no ad-hoc setup).
+  func newTestStore(t *testing.T) (*store.Store, func()) {
+  	return testsupport.NewTestStore(t)
+  }
+  ```
+
+- [ ] **Step 3: Run the test and confirm it FAILS.** Run `go test ./internal/app/auth/...`. Expected FAIL: the package does not compile — `undefined: (*auth.Service).VerifyEmail`.
+
+- [ ] **Step 4: Add `issueTokens` and `VerifyEmail` to `service.go`.** Append to `backend/internal/app/auth/service.go`. Order per contract: lookup user (not found → `ErrInvalidCode`, enumeration-safe); fetch active verification (none → `ErrInvalidCode`); expired → `ErrCodeExpired`; constant-time `CheckCode` — wrong → atomically increment (the UPDATE...RETURNING count) then enforce `MaxAttempts` on the RETURNED count (increment-then-compare) → `ErrTooManyAttempts` if at/over cap, else `ErrInvalidCode`; right → `ExecTx` { `SetUserEmailVerified`, `ConsumeEmailVerification`, `CreateSession` } and return `Tokens`. Add `"github.com/zulkhair/pustaka/backend/internal/pkg/jwt"` to the imports:
   ```go
   func (s *Service) issueTokens(ctx context.Context, u domain.User) (Tokens, error) {
   	access, err := jwt.GenerateAccess(u.ID, u.Role, s.cfg.JWTSecret, s.cfg.AccessTTL)
@@ -2431,13 +2876,15 @@ Steps:
   	if time.Now().After(ev.ExpiresAt) {
   		return Tokens{}, domain.ErrCodeExpired
   	}
-  	if ev.Attempts >= s.cfg.MaxAttempts {
-  		return Tokens{}, domain.ErrTooManyAttempts
-  	}
 
   	if !hash.CheckCode(ev.CodeHash, in.Code) {
-  		if _, incErr := s.store.IncrementVerificationAttempts(ctx, ev.ID); incErr != nil {
+  		// Atomic increment-then-compare: the UPDATE returns the new count.
+  		attempts, incErr := s.store.IncrementVerificationAttempts(ctx, ev.ID)
+  		if incErr != nil {
   			return Tokens{}, incErr
+  		}
+  		if attempts >= s.cfg.MaxAttempts {
+  			return Tokens{}, domain.ErrTooManyAttempts
   		}
   		return Tokens{}, domain.ErrInvalidCode
   	}
@@ -2479,13 +2926,24 @@ Steps:
   	return tokens, nil
   }
   ```
-  Add the import for `jwt` at the top of `service.go`: `"github.com/zulkhair/pustaka/backend/internal/pkg/jwt"`. (`issueTokens` is provided for Login/Refresh in their cluster to reuse for the non-transactional path; `VerifyEmail` inlines the same steps inside its `ExecTx` so verification + session creation are atomic.)
+  > `issueTokens` is provided for Login/Refresh to reuse for the non-transactional path; `VerifyEmail` inlines the same steps inside its `ExecTx` so verification + session creation are atomic. The attempt cap is enforced on the RETURNED count from the atomic `IncrementVerificationAttempts` (increment-then-compare), so concurrent wrong guesses can't slip past the cap.
 
-- [ ] **Step 4: Run the test and confirm it PASSES.** Run `go test ./internal/app/auth/...`. Expected PASS: wrong code → `ErrInvalidCode` with `Attempts == 1`; correct code → `EmailVerified == true`, non-empty `Tokens` with `ExpiresIn == 900`, and a session row found by `HashRefreshToken(tokens.RefreshToken)`.
+- [ ] **Step 5: Run the test and confirm it PASSES.** Run `go test ./internal/app/auth/...`. Expected PASS: wrong code → `ErrInvalidCode` with `Attempts == 1`; correct code → `EmailVerified == true`, non-empty `Tokens` with `ExpiresIn == 900`, and a session row found by `HashRefreshToken(tokens.RefreshToken)`.
 
-- [ ] **Step 5: Add the verify-email handler.** Append `VerifyEmail` to `backend/internal/adapter/httpapi/auth_handler.go`. Parse `VerifyReq`, call `svc.VerifyEmail`, map errors via `mapError`, and on success return the `TokensDTO`:
+- [ ] **Step 6: Add the verify-email handler + DTOs.** Append to `backend/internal/adapter/httpapi/auth_handler.go`. Parse `VerifyReq`, call `svc.VerifyEmail`, map errors via `mapAuthError`, and on success return the `TokensDTO`:
   ```go
-  func (h *Handler) VerifyEmail(c *fiber.Ctx) error {
+  type VerifyReq struct {
+  	Email string `json:"email"`
+  	Code  string `json:"code"`
+  }
+
+  type TokensDTO struct {
+  	AccessToken  string `json:"accessToken"`
+  	RefreshToken string `json:"refreshToken"`
+  	ExpiresIn    int    `json:"expiresIn"`
+  }
+
+  func (h *AuthHandler) VerifyEmail(c *fiber.Ctx) error {
   	var req VerifyReq
   	if err := c.BodyParser(&req); err != nil {
   		return Fail(c, fiber.StatusBadRequest, "invalid request body")
@@ -2495,7 +2953,7 @@ Steps:
   		Code:  req.Code,
   	})
   	if err != nil {
-  		return mapError(c, err)
+  		return mapAuthError(c, err)
   	}
   	return OK(c, TokensDTO{
   		AccessToken:  tokens.AccessToken,
@@ -2505,13 +2963,13 @@ Steps:
   }
   ```
 
-- [ ] **Step 6: Confirm the whole module compiles and tests still PASS.** Run `go vet ./...` (clean) and `go test ./internal/app/auth/... ./internal/adapter/httpapi/...`. Expected PASS for both packages.
+- [ ] **Step 7: Confirm the auth package compiles and tests pass.** Run `go vet ./internal/app/auth/...` (clean) and `go test ./internal/app/auth/...`. Expected PASS.
 
-- [ ] **Step 7: Commit.** `git add backend/internal/app/auth backend/internal/adapter/httpapi && git commit -m "feat(auth): add verify-email use-case and handler"` (no `Co-Authored-By` trailer).
+- [ ] **Step 8: Commit.** `git add backend/internal/app/auth backend/internal/adapter/httpapi && git commit -m "feat(auth): add verify-email use-case, issueTokens, and handler"` (no `Co-Authored-By` trailer).
 
-## Cluster D — Login & Session Lifecycle
+---
 
-### Task 13: `AuthService.ResendVerification` + handler
+### Task 14: `AuthService.ResendVerification` + handler (silent generic 200)
 
 **Files:**
 - Modify: `backend/internal/app/auth/service.go`
@@ -2522,286 +2980,267 @@ Steps:
 
 **Interfaces:**
 - Consumes (from earlier tasks):
-  - `domain.Store`: `GetUserByEmail(ctx, email) (User, error)`, `GetActiveEmailVerification(ctx, userID) (EmailVerification, error)`, `DeleteEmailVerificationsByUser(ctx, userID) error`, `CreateEmailVerification(ctx, CreateEmailVerificationParams) (EmailVerification, error)`
-  - `domain.Mailer`: `SendVerificationCode(ctx, toEmail, code) error`
-  - `hash.GenerateNumericCode(n int) (string, error)`, `hash.HashCode(code string, cost int) (string, error)`
-  - `domain.ErrResendCooldown`, `domain.ErrNotFound`
-  - `httpapi.OK(c, data) error`, `httpapi.Fail(c, httpCode, msg) error`
-  - `auth.New(store, mailer, cfg) *Service`
-  - `mail.MockMailer` (records `SendVerificationCode` calls)
+  - `domain.Store`: `GetUserByEmail`, `GetActiveEmailVerification`, `DeleteEmailVerificationsByUser`, `CreateEmailVerification`
+  - `domain.Mailer`: `SendVerificationCode`
+  - `hash.GenerateNumericCode`, `hash.HashCode`
+  - `domain.ErrResendCooldown` (internal-only), `domain.ErrNotFound`
+  - `httpapi.OK`, `httpapi.Fail`, `mapAuthError` (Task 12)
+  - `auth.New` (Task 12)
+  - the shared harness: `testsupport.NewTestStore`, `testsupport.BackdateVerification`, `mail.MockMailer`, and the httpapi harness `newTestApp` / `doJSON` / `seedUnverifiedUser` (Task 11)
   - `config.Config` fields `CodeTTL`, `ResendCooldown`, `BcryptCost`
 - Produces (later tasks rely on):
-  - `func (s *Service) ResendVerification(ctx context.Context, email string) error`
-  - HTTP route `POST /api/auth/resend-verification`
+  - `func (s *Service) ResendVerification(ctx context.Context, email string) error` — enforces cooldown as a SILENT no-op (returns nil), and is a no-op for unknown/verified emails
+  - HTTP route `POST /api/auth/resend-verification` — the handler ALWAYS returns the same generic 200
 
-- [ ] **Step 1: Write failing service test for the cooldown + no-op + success paths.**
+- [ ] **Step 1: Write the failing service test for the silent-cooldown + no-op + success paths.** Create `backend/internal/app/auth/resend_test.go`. The cooldown case asserts a SILENT no-op (no error, no mail), and uses `testsupport.BackdateVerification` to age a row past the cooldown for the success case:
+  ```go
+  package auth_test
 
-```go
-// backend/internal/app/auth/resend_test.go
-package auth_test
+  import (
+  	"context"
+  	"testing"
+  	"time"
 
-import (
-	"context"
-	"testing"
-	"time"
+  	"github.com/google/uuid"
+  	"github.com/stretchr/testify/require"
 
-	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/mail"
+  	"github.com/zulkhair/pustaka/backend/internal/app/auth"
+  	"github.com/zulkhair/pustaka/backend/internal/config"
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/testsupport"
+  )
 
-	"github.com/zulkhair/pustaka/backend/internal/app/auth"
-	"github.com/zulkhair/pustaka/backend/internal/config"
-	"github.com/zulkhair/pustaka/backend/internal/domain"
-)
+  func newResendService(t *testing.T, store domain.Store) (*auth.Service, *mail.MockMailer) {
+  	t.Helper()
+  	mailer := mail.NewMockMailer()
+  	cfg := config.Config{
+  		BcryptCost:     4,
+  		CodeTTL:        15 * time.Minute,
+  		ResendCooldown: 60 * time.Second,
+  	}
+  	return auth.New(store, mailer, cfg), mailer
+  }
 
-func newResendService(t *testing.T, store domain.Store) (*auth.Service, *mockMailer) {
-	t.Helper()
-	mailer := &mockMailer{}
-	cfg := config.Config{
-		BcryptCost:     4,
-		CodeTTL:        15 * time.Minute,
-		ResendCooldown: 60 * time.Second,
-	}
-	return auth.New(store, mailer, cfg), mailer
-}
+  func TestResendVerification_UnknownEmail_NoOp(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc, mailer := newResendService(t, store)
 
-func TestResendVerification_UnknownEmail_NoOp(t *testing.T) {
-	store := newTestStore(t)
-	svc, mailer := newResendService(t, store)
+  	err := svc.ResendVerification(context.Background(), "nobody@example.com")
+  	require.NoError(t, err)
+  	require.Len(t, mailer.Sends, 0, "no mail must be sent for unknown email")
+  }
 
-	err := svc.ResendVerification(context.Background(), "nobody@example.com")
-	require.NoError(t, err)
-	require.Equal(t, 0, mailer.calls, "no mail must be sent for unknown email")
-}
+  func TestResendVerification_AlreadyVerified_NoOp(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc, mailer := newResendService(t, store)
+  	ctx := context.Background()
 
-func TestResendVerification_AlreadyVerified_NoOp(t *testing.T) {
-	store := newTestStore(t)
-	svc, mailer := newResendService(t, store)
-	ctx := context.Background()
+  	u, err := store.CreateUser(ctx, domain.CreateUserParams{
+  		ID: uuid.NewString(), Username: "verified", Email: "verified@example.com",
+  		PasswordHash: "x", Role: domain.RoleUser,
+  	})
+  	require.NoError(t, err)
+  	require.NoError(t, store.SetUserEmailVerified(ctx, u.ID))
 
-	u, err := store.CreateUser(ctx, domain.CreateUserParams{
-		ID: uuid.NewString(), Username: "verified", Email: "verified@example.com",
-		PasswordHash: "x", Role: domain.RoleUser,
-	})
-	require.NoError(t, err)
-	require.NoError(t, store.SetUserEmailVerified(ctx, u.ID))
+  	err = svc.ResendVerification(ctx, "verified@example.com")
+  	require.NoError(t, err)
+  	require.Len(t, mailer.Sends, 0, "verified users must not get a resend")
+  }
 
-	err = svc.ResendVerification(ctx, "verified@example.com")
-	require.NoError(t, err)
-	require.Equal(t, 0, mailer.calls, "verified users must not get a resend")
-}
+  func TestResendVerification_WithinCooldown_SilentNoOp(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc, mailer := newResendService(t, store)
+  	ctx := context.Background()
 
-func TestResendVerification_WithinCooldown_Rejected(t *testing.T) {
-	store := newTestStore(t)
-	svc, mailer := newResendService(t, store)
-	ctx := context.Background()
+  	u, err := store.CreateUser(ctx, domain.CreateUserParams{
+  		ID: uuid.NewString(), Username: "fresh", Email: "fresh@example.com",
+  		PasswordHash: "x", Role: domain.RoleUser,
+  	})
+  	require.NoError(t, err)
+  	_, err = store.CreateEmailVerification(ctx, domain.CreateEmailVerificationParams{
+  		ID: uuid.NewString(), UserID: u.ID, CodeHash: "h",
+  		ExpiresAt: time.Now().Add(15 * time.Minute),
+  	})
+  	require.NoError(t, err)
 
-	u, err := store.CreateUser(ctx, domain.CreateUserParams{
-		ID: uuid.NewString(), Username: "fresh", Email: "fresh@example.com",
-		PasswordHash: "x", Role: domain.RoleUser,
-	})
-	require.NoError(t, err)
-	_, err = store.CreateEmailVerification(ctx, domain.CreateEmailVerificationParams{
-		ID: uuid.NewString(), UserID: u.ID, CodeHash: "h",
-		ExpiresAt: time.Now().Add(15 * time.Minute),
-	})
-	require.NoError(t, err)
+  	// SILENT no-op: the service swallows the cooldown internally and returns nil.
+  	err = svc.ResendVerification(ctx, "fresh@example.com")
+  	require.NoError(t, err)
+  	require.Len(t, mailer.Sends, 0)
+  }
 
-	err = svc.ResendVerification(ctx, "fresh@example.com")
-	require.ErrorIs(t, err, domain.ErrResendCooldown)
-	require.Equal(t, 0, mailer.calls)
-}
+  func TestResendVerification_AfterCooldown_SendsNewCode(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc, mailer := newResendService(t, store)
+  	ctx := context.Background()
 
-func TestResendVerification_AfterCooldown_SendsNewCode(t *testing.T) {
-	store := newTestStore(t)
-	svc, mailer := newResendService(t, store)
-	ctx := context.Background()
+  	u, err := store.CreateUser(ctx, domain.CreateUserParams{
+  		ID: uuid.NewString(), Username: "stale", Email: "stale@example.com",
+  		PasswordHash: "x", Role: domain.RoleUser,
+  	})
+  	require.NoError(t, err)
+  	_, err = store.CreateEmailVerification(ctx, domain.CreateEmailVerificationParams{
+  		ID: uuid.NewString(), UserID: u.ID, CodeHash: "old",
+  		ExpiresAt: time.Now().Add(15 * time.Minute),
+  	})
+  	require.NoError(t, err)
+  	// Age the verification past the cooldown window via the shared harness helper.
+  	testsupport.BackdateVerification(t, store.Pool(), u.ID, time.Now().Add(-5*time.Minute))
 
-	u, err := store.CreateUser(ctx, domain.CreateUserParams{
-		ID: uuid.NewString(), Username: "stale", Email: "stale@example.com",
-		PasswordHash: "x", Role: domain.RoleUser,
-	})
-	require.NoError(t, err)
-	// An old verification whose created_at predates the cooldown window.
-	_, err = store.CreateEmailVerification(ctx, domain.CreateEmailVerificationParams{
-		ID: uuid.NewString(), UserID: u.ID, CodeHash: "old",
-		ExpiresAt: time.Now().Add(15 * time.Minute),
-	})
-	require.NoError(t, err)
-	require.NoError(t, store.ForceVerificationCreatedAt(ctx, u.ID, time.Now().Add(-5*time.Minute)))
+  	err = svc.ResendVerification(ctx, "stale@example.com")
+  	require.NoError(t, err)
+  	require.Len(t, mailer.Sends, 1)
+  	require.Equal(t, "stale@example.com", mailer.LastEmail)
+  	require.Len(t, mailer.LastCode, 6)
+  }
+  ```
 
-	err = svc.ResendVerification(ctx, "stale@example.com")
-	require.NoError(t, err)
-	require.Equal(t, 1, mailer.calls)
-	require.Equal(t, "stale@example.com", mailer.lastEmail)
-	require.Len(t, mailer.lastCode, 6)
-}
-```
+- [ ] **Step 2: Run the test — expect FAIL.** Run `cd backend && go test ./internal/app/auth/ -run TestResendVerification 2>&1 | tail -n 20`. Expected FAIL: `undefined: (*auth.Service).ResendVerification`.
 
-> Assumes the shared test helpers `newTestStore(t)`, `mockMailer` (with fields `calls`, `lastEmail`, `lastCode`), and the store test-only helper `ForceVerificationCreatedAt(ctx, userID, t)` were defined in earlier auth/store test scaffolding tasks. If `ForceVerificationCreatedAt` does not yet exist, add it as a small test helper on the test store that issues `UPDATE email_verification SET created_at = $2 WHERE user_id = $1`.
+- [ ] **Step 3: Implement `ResendVerification` (silent, enumeration-safe).** The cooldown is enforced internally by returning `domain.ErrResendCooldown` and immediately swallowing it to nil (so the method is a silent no-op; the sentinel never escapes). Append to `backend/internal/app/auth/service.go`:
+  ```go
+  func (s *Service) ResendVerification(ctx context.Context, email string) error {
+  	email = normalizeEmail(email)
+  	if err := s.resendVerification(ctx, email); err != nil {
+  		if errors.Is(err, domain.ErrResendCooldown) {
+  			return nil // SILENT no-op: cooldown is never surfaced
+  		}
+  		return err
+  	}
+  	return nil
+  }
 
-- [ ] **Step 2: Run the test — expect FAIL.**
+  func (s *Service) resendVerification(ctx context.Context, email string) error {
+  	u, err := s.store.GetUserByEmail(ctx, email)
+  	if err != nil {
+  		if errors.Is(err, domain.ErrNotFound) {
+  			return nil // enumeration-safe no-op
+  		}
+  		return err
+  	}
+  	if u.EmailVerified {
+  		return nil // enumeration-safe no-op
+  	}
 
-```bash
-cd backend && go test ./internal/app/auth/ -run TestResendVerification 2>&1 | tail -n 20
-```
+  	existing, err := s.store.GetActiveEmailVerification(ctx, u.ID)
+  	if err == nil {
+  		if time.Since(existing.CreatedAt) < s.cfg.ResendCooldown {
+  			return domain.ErrResendCooldown
+  		}
+  	} else if !errors.Is(err, domain.ErrNotFound) {
+  		return err
+  	}
 
-Expected FAIL: `undefined: (*auth.Service).ResendVerification` (method not yet implemented).
+  	if err := s.store.DeleteEmailVerificationsByUser(ctx, u.ID); err != nil {
+  		return err
+  	}
 
-- [ ] **Step 3: Implement `ResendVerification` (minimal, enumeration-safe).**
+  	code, err := hash.GenerateNumericCode(6)
+  	if err != nil {
+  		return err
+  	}
+  	codeHash, err := hash.HashCode(code, s.cfg.BcryptCost)
+  	if err != nil {
+  		return err
+  	}
+  	if _, err := s.store.CreateEmailVerification(ctx, domain.CreateEmailVerificationParams{
+  		ID:        uuid.NewString(),
+  		UserID:    u.ID,
+  		CodeHash:  codeHash,
+  		ExpiresAt: time.Now().Add(s.cfg.CodeTTL),
+  	}); err != nil {
+  		return err
+  	}
 
-```go
-// backend/internal/app/auth/service.go  (add method)
-func (s *Service) ResendVerification(ctx context.Context, email string) error {
-	u, err := s.store.GetUserByEmail(ctx, email)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil // enumeration-safe no-op
-		}
-		return err
-	}
-	if u.EmailVerified {
-		return nil // enumeration-safe no-op
-	}
+  	return s.mailer.SendVerificationCode(ctx, u.Email, code)
+  }
+  ```
 
-	existing, err := s.store.GetActiveEmailVerification(ctx, u.ID)
-	if err == nil {
-		if time.Since(existing.CreatedAt) < s.cfg.ResendCooldown {
-			return domain.ErrResendCooldown
-		}
-	} else if !errors.Is(err, domain.ErrNotFound) {
-		return err
-	}
+- [ ] **Step 4: Run the test — expect PASS.** Run `cd backend && go test ./internal/app/auth/ -run TestResendVerification 2>&1 | tail -n 20`. Expected PASS: unknown/verified are no-ops, within-cooldown is a silent no-op (no error, no mail), after-cooldown sends a fresh 6-digit code.
 
-	if err := s.store.DeleteEmailVerificationsByUser(ctx, u.ID); err != nil {
-		return err
-	}
+- [ ] **Step 5: Write failing handler test (uniform generic 200).** Create `backend/internal/adapter/httpapi/auth_resend_test.go`. It asserts a UNIFORM 200 across unknown / verified / cooldown / fresh, and 400 only on a malformed body:
+  ```go
+  package httpapi_test
 
-	code, err := hash.GenerateNumericCode(6)
-	if err != nil {
-		return err
-	}
-	codeHash, err := hash.HashCode(code, s.cfg.BcryptCost)
-	if err != nil {
-		return err
-	}
-	if _, err := s.store.CreateEmailVerification(ctx, domain.CreateEmailVerificationParams{
-		ID:        uuid.NewString(),
-		UserID:    u.ID,
-		CodeHash:  codeHash,
-		ExpiresAt: time.Now().Add(s.cfg.CodeTTL),
-	}); err != nil {
-		return err
-	}
+  import (
+  	"context"
+  	"net/http"
+  	"testing"
 
-	return s.mailer.SendVerificationCode(ctx, u.Email, code)
-}
-```
+  	"github.com/stretchr/testify/require"
+  )
 
-> Ensure `service.go` imports `errors`, `time`, `github.com/google/uuid`, and the `hash` package; reference the existing `s.store`, `s.mailer`, `s.cfg` fields established by `auth.New`.
+  func TestResendHandler_UniformGeneric200(t *testing.T) {
+  	ta := newTestApp(t)
 
-- [ ] **Step 4: Run the test — expect PASS.**
+  	// unknown email
+  	resp := doJSON(t, ta, http.MethodPost, "/api/auth/resend-verification",
+  		map[string]string{"email": "nobody@example.com"})
+  	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-```bash
-cd backend && go test ./internal/app/auth/ -run TestResendVerification 2>&1 | tail -n 20
-```
+  	// verified user
+  	v := seedUnverifiedUser(t, ta.store, "verif", "verif@example.com")
+  	require.NoError(t, ta.store.SetUserEmailVerified(context.Background(), v.ID))
+  	resp = doJSON(t, ta, http.MethodPost, "/api/auth/resend-verification",
+  		map[string]string{"email": "verif@example.com"})
+  	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-Expected PASS: all four `TestResendVerification_*` cases green.
+  	// fresh unverified user, immediate resend -> within cooldown, still 200 (silent)
+  	seedUnverifiedUser(t, ta.store, "fresh", "fresh@example.com")
+  	resp = doJSON(t, ta, http.MethodPost, "/api/auth/resend-verification",
+  		map[string]string{"email": "fresh@example.com"})
+  	require.Equal(t, http.StatusOK, resp.StatusCode)
+  }
 
-- [ ] **Step 5: Write failing handler test (HTTP status mapping).**
+  func TestResendHandler_BadBody_400(t *testing.T) {
+  	ta := newTestApp(t)
+  	resp := doRaw(t, ta, http.MethodPost, "/api/auth/resend-verification", "not-json")
+  	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+  }
+  ```
 
-```go
-// backend/internal/adapter/httpapi/auth_resend_test.go
-package httpapi_test
+- [ ] **Step 6: Run the handler test — expect FAIL.** Run `cd backend && go test ./internal/adapter/httpapi/ -run TestResendHandler 2>&1 | tail -n 20`. Expected FAIL: `404` because the route `POST /api/auth/resend-verification` is not registered yet (or the handler method is undefined).
 
-import (
-	"net/http"
-	"testing"
+- [ ] **Step 7: Implement the resend handler and wire the route.** Because the service already swallows the cooldown, the handler simply returns a generic 200 on success. Add to `backend/internal/adapter/httpapi/auth_handler.go`:
+  ```go
+  type ResendReq struct {
+  	Email string `json:"email"`
+  }
 
-	"github.com/stretchr/testify/require"
-)
+  func (h *AuthHandler) ResendVerification(c *fiber.Ctx) error {
+  	var req ResendReq
+  	if err := c.BodyParser(&req); err != nil {
+  		return Fail(c, fiber.StatusBadRequest, "invalid request body")
+  	}
+  	if req.Email == "" {
+  		return Fail(c, fiber.StatusBadRequest, "email is required")
+  	}
+  	if err := h.svc.ResendVerification(c.Context(), req.Email); err != nil {
+  		return mapAuthError(c, err)
+  	}
+  	return OK(c, nil) // always the same generic 200 (no cooldown signal leaks)
+  }
+  ```
+  The route is wired in `router.go` (Task 19); when that task lands, add inside the `/auth` group:
+  ```go
+  authGrp.Post("/resend-verification", rl(), deps.Auth.ResendVerification)
+  ```
+  > `mapAuthError` never surfaces `ErrResendCooldown` (the service already swallowed it), so no 429 path exists for resend. The generic 200 is uniform across unknown/verified/cooldown/fresh.
 
-func TestResendHandler_UnknownEmail_200NoOp(t *testing.T) {
-	app, deps := newTestApp(t)
-	resp := doJSON(t, app, http.MethodPost, "/api/auth/resend-verification",
-		map[string]string{"email": "nobody@example.com"})
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	require.Equal(t, 0, deps.mailer.calls)
-}
+- [ ] **Step 8: Run the handler test — expect PASS.** Run `cd backend && go test ./internal/adapter/httpapi/ -run TestResendHandler 2>&1 | tail -n 20`. Expected PASS: uniform 200 across unknown/verified/cooldown/fresh; 400 on bad body.
 
-func TestResendHandler_WithinCooldown_429(t *testing.T) {
-	app, deps := newTestApp(t)
-	seedUnverifiedUser(t, deps.store, "fresh", "fresh@example.com") // creates a fresh verification too
-
-	resp := doJSON(t, app, http.MethodPost, "/api/auth/resend-verification",
-		map[string]string{"email": "fresh@example.com"})
-	require.Equal(t, http.StatusTooManyRequests, resp.StatusCode)
-}
-
-func TestResendHandler_BadBody_400(t *testing.T) {
-	app, _ := newTestApp(t)
-	resp := doRaw(t, app, http.MethodPost, "/api/auth/resend-verification", "not-json")
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
-```
-
-> Reuses the shared HTTP harness from earlier tasks: `newTestApp(t)` (returns the Fiber app plus a `deps` struct exposing `store` and `mailer`), `doJSON`, `doRaw`, and `seedUnverifiedUser(t, store, username, email)`.
-
-- [ ] **Step 6: Run the handler test — expect FAIL.**
-
-```bash
-cd backend && go test ./internal/adapter/httpapi/ -run TestResendHandler 2>&1 | tail -n 20
-```
-
-Expected FAIL: `404` from Fiber because the route `POST /api/auth/resend-verification` is not registered yet (or the handler method is undefined).
-
-- [ ] **Step 7: Implement the resend handler and wire the route.**
-
-```go
-// backend/internal/adapter/httpapi/auth_handler.go  (add)
-type ResendReq struct {
-	Email string `json:"email"`
-}
-
-func (h *AuthHandler) ResendVerification(c *fiber.Ctx) error {
-	var req ResendReq
-	if err := c.BodyParser(&req); err != nil {
-		return Fail(c, fiber.StatusBadRequest, "invalid request body")
-	}
-	if req.Email == "" {
-		return Fail(c, fiber.StatusBadRequest, "email is required")
-	}
-	if err := h.svc.ResendVerification(c.Context(), req.Email); err != nil {
-		return mapAuthError(c, err)
-	}
-	return OK(c, nil)
-}
-```
-
-```go
-// backend/internal/adapter/httpapi/router.go  (inside the /auth group)
-auth.Post("/resend-verification", RateLimit(rlMax, rlWindow), authHandler.ResendVerification)
-```
-
-> `mapAuthError` (defined in an earlier handler task) must already map `domain.ErrResendCooldown` → 429. `rlMax`/`rlWindow` are the rate-limit values established when the `/auth` group was created.
-
-- [ ] **Step 8: Run the handler test — expect PASS.**
-
-```bash
-cd backend && go test ./internal/adapter/httpapi/ -run TestResendHandler 2>&1 | tail -n 20
-```
-
-Expected PASS: 200 no-op, 429 within cooldown, 400 bad body.
-
-- [ ] **Step 9: Vet and commit.**
-
-```bash
-cd backend && go vet ./... && go test ./internal/app/auth/ ./internal/adapter/httpapi/ -run 'Resend' 2>&1 | tail -n 5
-git add -A && git commit -m "feat: add resend-verification use-case and endpoint"
-```
+- [ ] **Step 9: Vet and commit.** Run `cd backend && go vet ./... && go test ./internal/app/auth/ ./internal/adapter/httpapi/ -run 'Resend' 2>&1 | tail -n 5`, then `git add -A && git commit -m "feat: add resend-verification use-case and endpoint with silent cooldown"` (no `Co-Authored-By` trailer).
 
 ---
 
-### Task 14: `AuthService.Login` + handler
+## Cluster D — Login & Session Lifecycle (Tasks 15–17)
+
+### Task 15: `AuthService.Login` + handler
 
 **Files:**
 - Modify: `backend/internal/app/auth/service.go`
@@ -2812,352 +3251,292 @@ git add -A && git commit -m "feat: add resend-verification use-case and endpoint
 
 **Interfaces:**
 - Consumes (from earlier tasks):
-  - `domain.Store`: `GetUserByEmail`, `GetUserByUsername`, `CreateSession(ctx, CreateSessionParams) (Session, error)`
-  - `hash.CheckPassword(hash, pw string) bool`, `hash.HashPassword(pw, cost) (string, error)`, `hash.GenerateRefreshToken`/`hash.HashRefreshToken` via `jwt`/`hash` (see below)
-  - `jwt.GenerateAccess(userID, role, secret string, ttl time.Duration) (string, error)`, `jwt.GenerateRefreshToken() (string, error)`
-  - `hash.HashRefreshToken(raw string) string`
+  - `domain.Store`: `GetUserByEmail`, `GetUserByUsername`, `CreateSession`
+  - `hash.CheckPassword`, `hash.HashPassword`, `hash.HashRefreshToken`
+  - `jwt.GenerateAccess`, `jwt.GenerateRefreshToken`
   - `domain.ErrInvalidCredentials`, `domain.ErrEmailNotVerified`, `domain.ErrNotFound`
   - `config.Config` fields `JWTSecret`, `AccessTTL`, `RefreshTTL`
-  - `auth.Tokens` struct (`AccessToken`, `RefreshToken`, `ExpiresIn`)
+  - `auth.Tokens`, the `issueTokens` helper defined in Task 13, and `normalizeEmail` (Task 12)
+  - the shared harness seeders `seedVerifiedUser`, `seedUnverifiedUserWithPassword` and `doJSONBody` (Task 11)
 - Produces (later tasks rely on):
-  - `func (s *Service) Login(ctx context.Context, in LoginInput) (Tokens, error)`
-  - `type LoginInput struct { Identifier, Password string }`
-  - A reusable internal helper `func (s *Service) issueTokens(ctx context.Context, u domain.User) (Tokens, error)` that Tasks 15 reuses for token issuance
+  - `func (s *Service) Login(ctx context.Context, in LoginInput) (Tokens, error)` (`LoginInput` already declared in Task 12)
   - HTTP route `POST /api/auth/login`, request DTO `LoginReq{identifier,password}`, response `TokensDTO{accessToken,refreshToken,expiresIn}`
 
-- [ ] **Step 1: Write failing service test for all four login paths.**
+- [ ] **Step 1: Write failing service test for all login paths.** Create `backend/internal/app/auth/login_test.go`:
+  ```go
+  package auth_test
 
-```go
-// backend/internal/app/auth/login_test.go
-package auth_test
+  import (
+  	"context"
+  	"testing"
+  	"time"
 
-import (
-	"context"
-	"testing"
-	"time"
+  	"github.com/google/uuid"
+  	"github.com/stretchr/testify/require"
 
-	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
+  	"github.com/zulkhair/pustaka/backend/internal/app/auth"
+  	"github.com/zulkhair/pustaka/backend/internal/config"
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
+  )
 
-	"github.com/zulkhair/pustaka/backend/internal/app/auth"
-	"github.com/zulkhair/pustaka/backend/internal/config"
-	"github.com/zulkhair/pustaka/backend/internal/domain"
-	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
-)
+  func newLoginService(t *testing.T, store domain.Store) *auth.Service {
+  	t.Helper()
+  	cfg := config.Config{
+  		BcryptCost: 4,
+  		JWTSecret:  "test-secret",
+  		AccessTTL:  15 * time.Minute,
+  		RefreshTTL: 720 * time.Hour,
+  	}
+  	return auth.New(store, mail.NewMockMailer(), cfg)
+  }
 
-func newLoginService(t *testing.T, store domain.Store) *auth.Service {
-	t.Helper()
-	cfg := config.Config{
-		BcryptCost: 4,
-		JWTSecret:  "test-secret",
-		AccessTTL:  15 * time.Minute,
-		RefreshTTL: 720 * time.Hour,
-	}
-	return auth.New(store, &mockMailer{}, cfg)
-}
+  func seedVerifiedUserSvc(t *testing.T, store domain.Store, username, email, pw string) domain.User {
+  	t.Helper()
+  	ctx := context.Background()
+  	ph, err := hash.HashPassword(pw, 4)
+  	require.NoError(t, err)
+  	u, err := store.CreateUser(ctx, domain.CreateUserParams{
+  		ID: uuid.NewString(), Username: username, Email: email,
+  		PasswordHash: ph, Role: domain.RoleUser,
+  	})
+  	require.NoError(t, err)
+  	require.NoError(t, store.SetUserEmailVerified(ctx, u.ID))
+  	u.EmailVerified = true
+  	return u
+  }
 
-func seedVerifiedUser(t *testing.T, store domain.Store, username, email, pw string) domain.User {
-	t.Helper()
-	ctx := context.Background()
-	ph, err := hash.HashPassword(pw, 4)
-	require.NoError(t, err)
-	u, err := store.CreateUser(ctx, domain.CreateUserParams{
-		ID: uuid.NewString(), Username: username, Email: email,
-		PasswordHash: ph, Role: domain.RoleUser,
-	})
-	require.NoError(t, err)
-	require.NoError(t, store.SetUserEmailVerified(ctx, u.ID))
-	u.EmailVerified = true
-	return u
-}
+  func TestLogin_GoodCreds_IssuesTokensAndSession(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	u := seedVerifiedUserSvc(t, store, "alice", "alice@example.com", "hunter2pw")
 
-func TestLogin_GoodCreds_IssuesTokensAndSession(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
-	u := seedVerifiedUser(t, store, "alice", "alice@example.com", "hunter2pw")
+  	tok, err := svc.Login(context.Background(), auth.LoginInput{
+  		Identifier: "alice@example.com", Password: "hunter2pw",
+  	})
+  	require.NoError(t, err)
+  	require.NotEmpty(t, tok.AccessToken)
+  	require.NotEmpty(t, tok.RefreshToken)
+  	require.Equal(t, int((15 * time.Minute).Seconds()), tok.ExpiresIn)
 
-	tok, err := svc.Login(context.Background(), auth.LoginInput{
-		Identifier: "alice@example.com", Password: "hunter2pw",
-	})
-	require.NoError(t, err)
-	require.NotEmpty(t, tok.AccessToken)
-	require.NotEmpty(t, tok.RefreshToken)
-	require.Equal(t, int((15 * time.Minute).Seconds()), tok.ExpiresIn)
+  	sess, err := store.GetSessionByTokenHash(context.Background(), hash.HashRefreshToken(tok.RefreshToken))
+  	require.NoError(t, err)
+  	require.Equal(t, u.ID, sess.UserID)
+  }
 
-	// A session row exists for the issued refresh token.
-	sess, err := store.GetSessionByTokenHash(context.Background(), hash.HashRefreshToken(tok.RefreshToken))
-	require.NoError(t, err)
-	require.Equal(t, u.ID, sess.UserID)
-}
+  func TestLogin_ByUsername_Works(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	seedVerifiedUserSvc(t, store, "bob", "bob@example.com", "passwordpw")
 
-func TestLogin_ByUsername_Works(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
-	seedVerifiedUser(t, store, "bob", "bob@example.com", "passwordpw")
+  	tok, err := svc.Login(context.Background(), auth.LoginInput{
+  		Identifier: "bob", Password: "passwordpw",
+  	})
+  	require.NoError(t, err)
+  	require.NotEmpty(t, tok.AccessToken)
+  }
 
-	tok, err := svc.Login(context.Background(), auth.LoginInput{
-		Identifier: "bob", Password: "passwordpw",
-	})
-	require.NoError(t, err)
-	require.NotEmpty(t, tok.AccessToken)
-}
+  func TestLogin_ByEmail_NormalizesCase(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	seedVerifiedUserSvc(t, store, "cara", "cara@example.com", "carapassword1")
 
-func TestLogin_WrongPassword_InvalidCredentials(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
-	seedVerifiedUser(t, store, "carol", "carol@example.com", "rightpassword")
+  	tok, err := svc.Login(context.Background(), auth.LoginInput{
+  		Identifier: "  Cara@Example.com ", Password: "carapassword1",
+  	})
+  	require.NoError(t, err)
+  	require.NotEmpty(t, tok.AccessToken)
+  }
 
-	_, err := svc.Login(context.Background(), auth.LoginInput{
-		Identifier: "carol@example.com", Password: "wrongpassword",
-	})
-	require.ErrorIs(t, err, domain.ErrInvalidCredentials)
-}
+  func TestLogin_WrongPassword_InvalidCredentials(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	seedVerifiedUserSvc(t, store, "carol", "carol@example.com", "rightpassword")
 
-func TestLogin_UnknownIdentifier_InvalidCredentials(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
+  	_, err := svc.Login(context.Background(), auth.LoginInput{
+  		Identifier: "carol@example.com", Password: "wrongpassword",
+  	})
+  	require.ErrorIs(t, err, domain.ErrInvalidCredentials)
+  }
 
-	_, err := svc.Login(context.Background(), auth.LoginInput{
-		Identifier: "ghost@example.com", Password: "whatever123",
-	})
-	require.ErrorIs(t, err, domain.ErrInvalidCredentials) // identical to wrong-password = enumeration-safe
-}
+  func TestLogin_UnknownIdentifier_InvalidCredentials(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
 
-func TestLogin_Unverified_EmailNotVerified(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
-	ctx := context.Background()
-	ph, err := hash.HashPassword("secretpass1", 4)
-	require.NoError(t, err)
-	_, err = store.CreateUser(ctx, domain.CreateUserParams{
-		ID: uuid.NewString(), Username: "dan", Email: "dan@example.com",
-		PasswordHash: ph, Role: domain.RoleUser,
-	})
-	require.NoError(t, err)
+  	_, err := svc.Login(context.Background(), auth.LoginInput{
+  		Identifier: "ghost@example.com", Password: "whatever123",
+  	})
+  	require.ErrorIs(t, err, domain.ErrInvalidCredentials) // identical to wrong-password = enumeration-safe
+  }
 
-	_, err = svc.Login(ctx, auth.LoginInput{Identifier: "dan@example.com", Password: "secretpass1"})
-	require.ErrorIs(t, err, domain.ErrEmailNotVerified)
-}
-```
+  func TestLogin_Unverified_EmailNotVerified(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	ctx := context.Background()
+  	ph, err := hash.HashPassword("secretpass1", 4)
+  	require.NoError(t, err)
+  	_, err = store.CreateUser(ctx, domain.CreateUserParams{
+  		ID: uuid.NewString(), Username: "dan", Email: "dan@example.com",
+  		PasswordHash: ph, Role: domain.RoleUser,
+  	})
+  	require.NoError(t, err)
 
-- [ ] **Step 2: Run the test — expect FAIL.**
+  	_, err = svc.Login(ctx, auth.LoginInput{Identifier: "dan@example.com", Password: "secretpass1"})
+  	require.ErrorIs(t, err, domain.ErrEmailNotVerified)
+  }
+  ```
+  > This file also needs the `mail` import: `"github.com/zulkhair/pustaka/backend/internal/adapter/mail"` (used by `newLoginService`).
 
-```bash
-cd backend && go test ./internal/app/auth/ -run TestLogin 2>&1 | tail -n 20
-```
+- [ ] **Step 2: Run the test — expect FAIL.** Run `cd backend && go test ./internal/app/auth/ -run TestLogin 2>&1 | tail -n 20`. Expected FAIL: `undefined: (*auth.Service).Login`.
 
-Expected FAIL: `undefined: (*auth.Service).Login` and `undefined: auth.LoginInput`.
+- [ ] **Step 3: Implement `Login` (reusing `issueTokens`).** `issueTokens` is already defined in Task 13 — do NOT redefine it; Login simply calls it. When the identifier contains `@`, look up via `GetUserByEmail(normalizeEmail(...))` so it matches Register's lowercase+trim. Append to `backend/internal/app/auth/service.go`:
+  ```go
+  func (s *Service) Login(ctx context.Context, in LoginInput) (Tokens, error) {
+  	var (
+  		u   domain.User
+  		err error
+  	)
+  	if strings.Contains(in.Identifier, "@") {
+  		u, err = s.store.GetUserByEmail(ctx, normalizeEmail(in.Identifier))
+  	} else {
+  		u, err = s.store.GetUserByUsername(ctx, strings.TrimSpace(in.Identifier))
+  	}
+  	if err != nil {
+  		if errors.Is(err, domain.ErrNotFound) {
+  			return Tokens{}, domain.ErrInvalidCredentials // enumeration-safe
+  		}
+  		return Tokens{}, err
+  	}
 
-- [ ] **Step 3: Implement `LoginInput`, `Login`, and the shared `issueTokens` helper.**
+  	// Deliberate trade-off: an unknown identifier OR a wrong password both return
+  	// the identical ErrInvalidCredentials (enumeration-safe). The verified-status
+  	// signal (ErrEmailNotVerified) is only revealed AFTER valid credentials, so it
+  	// cannot be used to probe which emails exist.
+  	if !hash.CheckPassword(u.PasswordHash, in.Password) {
+  		return Tokens{}, domain.ErrInvalidCredentials
+  	}
+  	if !u.EmailVerified {
+  		return Tokens{}, domain.ErrEmailNotVerified
+  	}
 
-```go
-// backend/internal/app/auth/service.go  (add)
-type LoginInput struct {
-	Identifier string // username OR email
-	Password   string
-}
+  	return s.issueTokens(ctx, u)
+  }
+  ```
 
-func (s *Service) Login(ctx context.Context, in LoginInput) (Tokens, error) {
-	var (
-		u   domain.User
-		err error
-	)
-	if strings.Contains(in.Identifier, "@") {
-		u, err = s.store.GetUserByEmail(ctx, in.Identifier)
-	} else {
-		u, err = s.store.GetUserByUsername(ctx, in.Identifier)
-	}
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return Tokens{}, domain.ErrInvalidCredentials // enumeration-safe
-		}
-		return Tokens{}, err
-	}
+- [ ] **Step 4: Run the test — expect PASS.** Run `cd backend && go test ./internal/app/auth/ -run TestLogin 2>&1 | tail -n 20`. Expected PASS: good creds issue tokens + session, username + case-normalized email login works, wrong-password and unknown-identifier both `ErrInvalidCredentials`, unverified `ErrEmailNotVerified`.
 
-	if !hash.CheckPassword(u.PasswordHash, in.Password) {
-		return Tokens{}, domain.ErrInvalidCredentials
-	}
-	if !u.EmailVerified {
-		return Tokens{}, domain.ErrEmailNotVerified
-	}
+- [ ] **Step 5: Write failing handler test (status codes + identical wrong-creds message).** Create `backend/internal/adapter/httpapi/auth_login_test.go`:
+  ```go
+  package httpapi_test
 
-	return s.issueTokens(ctx, u)
-}
+  import (
+  	"net/http"
+  	"testing"
 
-// issueTokens mints an access JWT plus a fresh opaque refresh token, persists a
-// session row keyed by the SHA-256 hash of the refresh token, and returns both.
-func (s *Service) issueTokens(ctx context.Context, u domain.User) (Tokens, error) {
-	access, err := jwt.GenerateAccess(u.ID, u.Role, s.cfg.JWTSecret, s.cfg.AccessTTL)
-	if err != nil {
-		return Tokens{}, err
-	}
-	refresh, err := jwt.GenerateRefreshToken()
-	if err != nil {
-		return Tokens{}, err
-	}
-	if _, err := s.store.CreateSession(ctx, domain.CreateSessionParams{
-		ID:               uuid.NewString(),
-		UserID:           u.ID,
-		RefreshTokenHash: hash.HashRefreshToken(refresh),
-		ExpiresAt:        time.Now().Add(s.cfg.RefreshTTL),
-	}); err != nil {
-		return Tokens{}, err
-	}
-	return Tokens{
-		AccessToken:  access,
-		RefreshToken: refresh,
-		ExpiresIn:    int(s.cfg.AccessTTL.Seconds()),
-	}, nil
-}
-```
+  	"github.com/stretchr/testify/require"
+  )
 
-> Add `strings` to the imports and ensure `jwt` (`github.com/zulkhair/pustaka/backend/internal/pkg/jwt`) is imported. If a prior task (VerifyEmail) already defined `issueTokens`, do NOT redefine it — reuse the existing one and skip the helper here.
+  func TestLoginHandler_Good_200WithTokens(t *testing.T) {
+  	ta := newTestApp(t)
+  	seedVerifiedUser(t, ta.store, "eve", "eve@example.com", "longpassword1")
 
-- [ ] **Step 4: Run the test — expect PASS.**
+  	resp, body := doJSONBody(t, ta, http.MethodPost, "/api/auth/login",
+  		map[string]string{"identifier": "eve@example.com", "password": "longpassword1"})
+  	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-```bash
-cd backend && go test ./internal/app/auth/ -run TestLogin 2>&1 | tail -n 20
-```
+  	data := body["data"].(map[string]any)
+  	require.NotEmpty(t, data["accessToken"])
+  	require.NotEmpty(t, data["refreshToken"])
+  	require.Greater(t, data["expiresIn"].(float64), float64(0))
+  }
 
-Expected PASS: good creds issue tokens + session, username login works, wrong-password and unknown-identifier both `ErrInvalidCredentials`, unverified `ErrEmailNotVerified`.
+  func TestLoginHandler_WrongPassword_401(t *testing.T) {
+  	ta := newTestApp(t)
+  	seedVerifiedUser(t, ta.store, "frank", "frank@example.com", "correctpass1")
 
-- [ ] **Step 5: Write failing handler test (status codes + identical wrong-creds message).**
+  	resp, body := doJSONBody(t, ta, http.MethodPost, "/api/auth/login",
+  		map[string]string{"identifier": "frank@example.com", "password": "nope"})
+  	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+  	require.Equal(t, wrongCredsMsg(t, ta), body["message"])
+  }
 
-```go
-// backend/internal/adapter/httpapi/auth_login_test.go
-package httpapi_test
+  func TestLoginHandler_UnknownIdentifier_401_SameMessage(t *testing.T) {
+  	ta := newTestApp(t)
+  	resp, body := doJSONBody(t, ta, http.MethodPost, "/api/auth/login",
+  		map[string]string{"identifier": "ghost@example.com", "password": "whatever"})
+  	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+  	require.Equal(t, wrongCredsMsg(t, ta), body["message"]) // enumeration-safe: identical to wrong-password
+  }
 
-import (
-	"net/http"
-	"testing"
+  func TestLoginHandler_Unverified_401(t *testing.T) {
+  	ta := newTestApp(t)
+  	seedUnverifiedUserWithPassword(t, ta.store, "gina", "gina@example.com", "verifyme123")
 
-	"github.com/stretchr/testify/require"
-)
+  	resp, _ := doJSONBody(t, ta, http.MethodPost, "/api/auth/login",
+  		map[string]string{"identifier": "gina@example.com", "password": "verifyme123"})
+  	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+  }
 
-func TestLoginHandler_Good_200WithTokens(t *testing.T) {
-	app, deps := newTestApp(t)
-	seedVerifiedUser(t, deps.store, "eve", "eve@example.com", "longpassword1")
+  // wrongCredsMsg captures the generic invalid-credentials message once so the
+  // two enumeration-safe assertions compare against the same source of truth.
+  func wrongCredsMsg(t *testing.T, ta *testApp) string {
+  	t.Helper()
+  	_, body := doJSONBody(t, ta, http.MethodPost, "/api/auth/login",
+  		map[string]string{"identifier": "zzz@example.com", "password": "x"})
+  	return body["message"].(string)
+  }
+  ```
 
-	resp, body := doJSONBody(t, app, http.MethodPost, "/api/auth/login",
-		map[string]string{"identifier": "eve@example.com", "password": "longpassword1"})
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+- [ ] **Step 6: Run the handler test — expect FAIL.** Run `cd backend && go test ./internal/adapter/httpapi/ -run TestLoginHandler 2>&1 | tail -n 20`. Expected FAIL: route `POST /api/auth/login` returns 404 (handler/route not registered).
 
-	data := body["data"].(map[string]any)
-	require.NotEmpty(t, data["accessToken"])
-	require.NotEmpty(t, data["refreshToken"])
-	require.Greater(t, data["expiresIn"].(float64), float64(0))
-}
+- [ ] **Step 7: Implement the login handler and wire the route.** Add to `backend/internal/adapter/httpapi/auth_handler.go`:
+  ```go
+  type LoginReq struct {
+  	Identifier string `json:"identifier"`
+  	Password   string `json:"password"`
+  }
 
-func TestLoginHandler_WrongPassword_401(t *testing.T) {
-	app, deps := newTestApp(t)
-	seedVerifiedUser(t, deps.store, "frank", "frank@example.com", "correctpass1")
+  func (h *AuthHandler) Login(c *fiber.Ctx) error {
+  	var req LoginReq
+  	if err := c.BodyParser(&req); err != nil {
+  		return Fail(c, fiber.StatusBadRequest, "invalid request body")
+  	}
+  	if req.Identifier == "" || req.Password == "" {
+  		return Fail(c, fiber.StatusBadRequest, "identifier and password are required")
+  	}
+  	tok, err := h.svc.Login(c.Context(), auth.LoginInput{
+  		Identifier: req.Identifier,
+  		Password:   req.Password,
+  	})
+  	if err != nil {
+  		return mapAuthError(c, err)
+  	}
+  	return OK(c, TokensDTO{
+  		AccessToken:  tok.AccessToken,
+  		RefreshToken: tok.RefreshToken,
+  		ExpiresIn:    tok.ExpiresIn,
+  	})
+  }
+  ```
+  Wire the route in `router.go` (Task 19), inside the `/auth` group:
+  ```go
+  authGrp.Post("/login", rl(), deps.Auth.Login)
+  ```
+  > `mapAuthError` maps both `domain.ErrInvalidCredentials` and `domain.ErrEmailNotVerified` to 401 with the identical generic "unauthorized" message (per the contract table), so the wrong-password / unknown-identifier / unverified responses are indistinguishable. `TokensDTO` was declared in Task 13 — reuse it; do NOT redeclare.
 
-	resp, body := doJSONBody(t, app, http.MethodPost, "/api/auth/login",
-		map[string]string{"identifier": "frank@example.com", "password": "nope"})
-	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-	require.Equal(t, wrongCredsMsg(t, app), body["message"])
-}
+- [ ] **Step 8: Run the handler test — expect PASS.** Run `cd backend && go test ./internal/adapter/httpapi/ -run TestLoginHandler 2>&1 | tail -n 20`. Expected PASS: 200 with tokens, 401 wrong-password, 401 unknown-identifier with the identical message, 401 unverified.
 
-func TestLoginHandler_UnknownIdentifier_401_SameMessage(t *testing.T) {
-	app, _ := newTestApp(t)
-	resp, body := doJSONBody(t, app, http.MethodPost, "/api/auth/login",
-		map[string]string{"identifier": "ghost@example.com", "password": "whatever"})
-	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-	require.Equal(t, wrongCredsMsg(t, app), body["message"]) // enumeration-safe: identical to wrong-password
-}
-
-func TestLoginHandler_Unverified_401(t *testing.T) {
-	app, deps := newTestApp(t)
-	seedUnverifiedUserWithPassword(t, deps.store, "gina", "gina@example.com", "verifyme123")
-
-	resp, _ := doJSONBody(t, app, http.MethodPost, "/api/auth/login",
-		map[string]string{"identifier": "gina@example.com", "password": "verifyme123"})
-	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-}
-
-// wrongCredsMsg captures the generic invalid-credentials message once so the
-// two enumeration-safe assertions compare against the same source of truth.
-func wrongCredsMsg(t *testing.T, app testApp) string {
-	t.Helper()
-	_, body := doJSONBody(t, app, http.MethodPost, "/api/auth/login",
-		map[string]string{"identifier": "zzz@example.com", "password": "x"})
-	return body["message"].(string)
-}
-```
-
-> Uses harness helpers `doJSONBody` (returns response + decoded envelope map), `seedVerifiedUser`, and `seedUnverifiedUserWithPassword` (creates an unverified user with a known bcrypt password). `testApp` is the harness app type. If `seedUnverifiedUserWithPassword` does not yet exist, add it next to the other seeders in the test harness.
-
-- [ ] **Step 6: Run the handler test — expect FAIL.**
-
-```bash
-cd backend && go test ./internal/adapter/httpapi/ -run TestLoginHandler 2>&1 | tail -n 20
-```
-
-Expected FAIL: route `POST /api/auth/login` returns 404 (handler/route not registered).
-
-- [ ] **Step 7: Implement the login handler and wire the route.**
-
-```go
-// backend/internal/adapter/httpapi/auth_handler.go  (add)
-type LoginReq struct {
-	Identifier string `json:"identifier"`
-	Password   string `json:"password"`
-}
-
-type TokensDTO struct {
-	AccessToken  string `json:"accessToken"`
-	RefreshToken string `json:"refreshToken"`
-	ExpiresIn    int    `json:"expiresIn"`
-}
-
-func (h *AuthHandler) Login(c *fiber.Ctx) error {
-	var req LoginReq
-	if err := c.BodyParser(&req); err != nil {
-		return Fail(c, fiber.StatusBadRequest, "invalid request body")
-	}
-	if req.Identifier == "" || req.Password == "" {
-		return Fail(c, fiber.StatusBadRequest, "identifier and password are required")
-	}
-	tok, err := h.svc.Login(c.Context(), auth.LoginInput{
-		Identifier: req.Identifier,
-		Password:   req.Password,
-	})
-	if err != nil {
-		return mapAuthError(c, err)
-	}
-	return OK(c, TokensDTO{
-		AccessToken:  tok.AccessToken,
-		RefreshToken: tok.RefreshToken,
-		ExpiresIn:    tok.ExpiresIn,
-	})
-}
-```
-
-```go
-// backend/internal/adapter/httpapi/router.go  (inside the /auth group)
-auth.Post("/login", RateLimit(rlMax, rlWindow), authHandler.Login)
-```
-
-> Import the `auth` app package in `auth_handler.go` if not already present. `mapAuthError` must map both `domain.ErrInvalidCredentials` and `domain.ErrEmailNotVerified` to 401 (per the contract's error→HTTP table); confirm both branches exist. If `TokensDTO` was already declared by the VerifyEmail handler task, do NOT redeclare it — reuse it.
-
-- [ ] **Step 8: Run the handler test — expect PASS.**
-
-```bash
-cd backend && go test ./internal/adapter/httpapi/ -run TestLoginHandler 2>&1 | tail -n 20
-```
-
-Expected PASS: 200 with tokens, 401 wrong-password, 401 unknown-identifier with the identical message, 401 unverified.
-
-- [ ] **Step 9: Vet and commit.**
-
-```bash
-cd backend && go vet ./... && go test ./internal/app/auth/ ./internal/adapter/httpapi/ -run 'Login' 2>&1 | tail -n 5
-git add -A && git commit -m "feat: add login use-case and endpoint with enumeration-safe errors"
-```
+- [ ] **Step 9: Vet and commit.** Run `cd backend && go vet ./... && go test ./internal/app/auth/ ./internal/adapter/httpapi/ -run 'Login' 2>&1 | tail -n 5`, then `git add -A && git commit -m "feat: add login use-case and endpoint with enumeration-safe errors"` (no `Co-Authored-By` trailer).
 
 ---
 
-### Task 15: `AuthService.Refresh` + handler (rotation)
+### Task 16: `AuthService.Refresh` + handler (rotation + theft response)
 
 **Files:**
 - Modify: `backend/internal/app/auth/service.go`
@@ -3168,292 +3547,268 @@ git add -A && git commit -m "feat: add login use-case and endpoint with enumerat
 
 **Interfaces:**
 - Consumes (from earlier tasks):
-  - `domain.Store`: `GetSessionByTokenHash(ctx, hash) (Session, error)`, `GetUserByID(ctx, id) (User, error)`, `RevokeSession(ctx, id) error`, `CreateSession(...)`, `ExecTx(ctx, func(Store) error) error`
-  - `hash.HashRefreshToken(raw string) string`
-  - `Service.issueTokens(ctx, domain.User) (Tokens, error)` (Task 14)
-  - `Service.Login` (Task 14, for tests to mint a starting token)
+  - `domain.Store`: `GetSessionByTokenHash`, `GetUserByID`, `RevokeSession`, `RevokeAllUserSessions`, `CreateSession`, `ExecTx`
+  - `hash.HashRefreshToken`
+  - `jwt.GenerateAccess`, `jwt.GenerateRefreshToken`
+  - `Service.Login` (Task 15, for tests to mint a starting token)
   - `domain.ErrUnauthorized`, `domain.ErrNotFound`
+  - the shared harness seeders + `doJSONBody`/`doRaw` (Task 11)
 - Produces (later tasks rely on):
   - `func (s *Service) Refresh(ctx context.Context, refreshToken string) (Tokens, error)`
   - HTTP route `POST /api/auth/refresh`, request DTO `RefreshReq{refreshToken}`
 
-- [ ] **Step 1: Write failing service test: rotation, reuse rejection, expiry.**
+- [ ] **Step 1: Write failing service test: rotation, reuse-as-theft, expiry.** Create `backend/internal/app/auth/refresh_test.go`. The reuse case asserts that replaying a rotated (revoked) token kills the LIVE session too (theft response):
+  ```go
+  package auth_test
 
-```go
-// backend/internal/app/auth/refresh_test.go
-package auth_test
+  import (
+  	"context"
+  	"testing"
+  	"time"
 
-import (
-	"context"
-	"testing"
-	"time"
+  	"github.com/google/uuid"
+  	"github.com/stretchr/testify/require"
 
-	"github.com/google/uuid"
-	"github.com/stretchr/testify/require"
+  	"github.com/zulkhair/pustaka/backend/internal/app/auth"
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
+  )
 
-	"github.com/zulkhair/pustaka/backend/internal/app/auth"
-	"github.com/zulkhair/pustaka/backend/internal/domain"
-	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
-)
+  func TestRefresh_Valid_RotatesAndRevokesOld(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	ctx := context.Background()
+  	seedVerifiedUserSvc(t, store, "rita", "rita@example.com", "ritapassword1")
 
-func TestRefresh_Valid_RotatesAndRevokesOld(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
-	ctx := context.Background()
-	seedVerifiedUser(t, store, "rita", "rita@example.com", "ritapassword1")
+  	first, err := svc.Login(ctx, auth.LoginInput{Identifier: "rita@example.com", Password: "ritapassword1"})
+  	require.NoError(t, err)
 
-	first, err := svc.Login(ctx, auth.LoginInput{Identifier: "rita@example.com", Password: "ritapassword1"})
-	require.NoError(t, err)
+  	second, err := svc.Refresh(ctx, first.RefreshToken)
+  	require.NoError(t, err)
+  	require.NotEmpty(t, second.AccessToken)
+  	require.NotEqual(t, first.RefreshToken, second.RefreshToken)
 
-	second, err := svc.Refresh(ctx, first.RefreshToken)
-	require.NoError(t, err)
-	require.NotEmpty(t, second.AccessToken)
-	require.NotEqual(t, first.RefreshToken, second.RefreshToken)
+  	old, err := store.GetSessionByTokenHash(ctx, hash.HashRefreshToken(first.RefreshToken))
+  	require.NoError(t, err)
+  	require.NotNil(t, old.RevokedAt, "old session must be revoked after rotation")
 
-	// The OLD session is revoked.
-	old, err := store.GetSessionByTokenHash(ctx, hash.HashRefreshToken(first.RefreshToken))
-	require.NoError(t, err)
-	require.NotNil(t, old.RevokedAt, "old session must be revoked after rotation")
+  	fresh, err := store.GetSessionByTokenHash(ctx, hash.HashRefreshToken(second.RefreshToken))
+  	require.NoError(t, err)
+  	require.Nil(t, fresh.RevokedAt)
+  }
 
-	// The NEW session is live.
-	fresh, err := store.GetSessionByTokenHash(ctx, hash.HashRefreshToken(second.RefreshToken))
-	require.NoError(t, err)
-	require.Nil(t, fresh.RevokedAt)
-}
+  func TestRefresh_ReuseAfterRotation_RevokesAllAndUnauthorized(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	ctx := context.Background()
+  	seedVerifiedUserSvc(t, store, "sam", "sam@example.com", "sampassword1")
 
-func TestRefresh_ReuseAfterRotation_Unauthorized(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
-	ctx := context.Background()
-	seedVerifiedUser(t, store, "sam", "sam@example.com", "sampassword1")
+  	first, err := svc.Login(ctx, auth.LoginInput{Identifier: "sam@example.com", Password: "sampassword1"})
+  	require.NoError(t, err)
+  	second, err := svc.Refresh(ctx, first.RefreshToken)
+  	require.NoError(t, err)
 
-	first, err := svc.Login(ctx, auth.LoginInput{Identifier: "sam@example.com", Password: "sampassword1"})
-	require.NoError(t, err)
-	_, err = svc.Refresh(ctx, first.RefreshToken)
-	require.NoError(t, err)
+  	// Replaying the old (now-revoked) token is theft: reject AND kill the live session.
+  	_, err = svc.Refresh(ctx, first.RefreshToken)
+  	require.ErrorIs(t, err, domain.ErrUnauthorized)
 
-	// Replaying the old (now-revoked) token must be rejected.
-	_, err = svc.Refresh(ctx, first.RefreshToken)
-	require.ErrorIs(t, err, domain.ErrUnauthorized)
-}
+  	live, err := store.GetSessionByTokenHash(ctx, hash.HashRefreshToken(second.RefreshToken))
+  	require.NoError(t, err)
+  	require.NotNil(t, live.RevokedAt, "replay must revoke the live session too (theft response)")
+  }
 
-func TestRefresh_UnknownToken_Unauthorized(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
+  func TestRefresh_UnknownToken_Unauthorized(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
 
-	_, err := svc.Refresh(context.Background(), "this-token-was-never-issued")
-	require.ErrorIs(t, err, domain.ErrUnauthorized)
-}
+  	_, err := svc.Refresh(context.Background(), "this-token-was-never-issued")
+  	require.ErrorIs(t, err, domain.ErrUnauthorized)
+  }
 
-func TestRefresh_Expired_Unauthorized(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
-	ctx := context.Background()
-	u := seedVerifiedUser(t, store, "tina", "tina@example.com", "tinapassword1")
+  func TestRefresh_Expired_Unauthorized(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	ctx := context.Background()
+  	u := seedVerifiedUserSvc(t, store, "tina", "tina@example.com", "tinapassword1")
 
-	raw := "expired-refresh-token-value"
-	_, err := store.CreateSession(ctx, domain.CreateSessionParams{
-		ID:               uuid.NewString(),
-		UserID:           u.ID,
-		RefreshTokenHash: hash.HashRefreshToken(raw),
-		ExpiresAt:        time.Now().Add(-time.Minute), // already expired
-	})
-	require.NoError(t, err)
+  	raw := "expired-refresh-token-value"
+  	_, err := store.CreateSession(ctx, domain.CreateSessionParams{
+  		ID:               uuid.NewString(),
+  		UserID:           u.ID,
+  		RefreshTokenHash: hash.HashRefreshToken(raw),
+  		ExpiresAt:        time.Now().Add(-time.Minute), // already expired
+  	})
+  	require.NoError(t, err)
 
-	_, err = svc.Refresh(ctx, raw)
-	require.ErrorIs(t, err, domain.ErrUnauthorized)
-}
-```
+  	_, err = svc.Refresh(ctx, raw)
+  	require.ErrorIs(t, err, domain.ErrUnauthorized)
+  }
+  ```
 
-- [ ] **Step 2: Run the test — expect FAIL.**
+- [ ] **Step 2: Run the test — expect FAIL.** Run `cd backend && go test ./internal/app/auth/ -run TestRefresh 2>&1 | tail -n 20`. Expected FAIL: `undefined: (*auth.Service).Refresh`.
 
-```bash
-cd backend && go test ./internal/app/auth/ -run TestRefresh 2>&1 | tail -n 20
-```
+- [ ] **Step 3: Implement `Refresh` with transactional rotation + theft response.** When the matched session is already revoked, call `RevokeAllUserSessions` before returning `ErrUnauthorized` (a revoked token being replayed signals theft). Append to `backend/internal/app/auth/service.go`:
+  ```go
+  func (s *Service) Refresh(ctx context.Context, refreshToken string) (Tokens, error) {
+  	tokenHash := hash.HashRefreshToken(refreshToken)
 
-Expected FAIL: `undefined: (*auth.Service).Refresh`.
+  	sess, err := s.store.GetSessionByTokenHash(ctx, tokenHash)
+  	if err != nil {
+  		if errors.Is(err, domain.ErrNotFound) {
+  			return Tokens{}, domain.ErrUnauthorized
+  		}
+  		return Tokens{}, err
+  	}
 
-- [ ] **Step 3: Implement `Refresh` with transactional rotation.**
+  	// Reuse of a revoked token is treated as theft: revoke ALL of the user's
+  	// sessions (including the live rotated one) before rejecting.
+  	if sess.RevokedAt != nil {
+  		if revErr := s.store.RevokeAllUserSessions(ctx, sess.UserID); revErr != nil {
+  			return Tokens{}, revErr
+  		}
+  		return Tokens{}, domain.ErrUnauthorized
+  	}
+  	if time.Now().After(sess.ExpiresAt) {
+  		return Tokens{}, domain.ErrUnauthorized
+  	}
 
-```go
-// backend/internal/app/auth/service.go  (add)
-func (s *Service) Refresh(ctx context.Context, refreshToken string) (Tokens, error) {
-	tokenHash := hash.HashRefreshToken(refreshToken)
+  	u, err := s.store.GetUserByID(ctx, sess.UserID)
+  	if err != nil {
+  		if errors.Is(err, domain.ErrNotFound) {
+  			return Tokens{}, domain.ErrUnauthorized
+  		}
+  		return Tokens{}, err
+  	}
 
-	sess, err := s.store.GetSessionByTokenHash(ctx, tokenHash)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return Tokens{}, domain.ErrUnauthorized
-		}
-		return Tokens{}, err
-	}
-	if sess.RevokedAt != nil || time.Now().After(sess.ExpiresAt) {
-		return Tokens{}, domain.ErrUnauthorized // revoked (incl. reuse-after-rotation) or expired
-	}
+  	access, err := jwt.GenerateAccess(u.ID, u.Role, s.cfg.JWTSecret, s.cfg.AccessTTL)
+  	if err != nil {
+  		return Tokens{}, err
+  	}
+  	refresh, err := jwt.GenerateRefreshToken()
+  	if err != nil {
+  		return Tokens{}, err
+  	}
 
-	u, err := s.store.GetUserByID(ctx, sess.UserID)
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return Tokens{}, domain.ErrUnauthorized
-		}
-		return Tokens{}, err
-	}
+  	if err := s.store.ExecTx(ctx, func(tx domain.Store) error {
+  		if err := tx.RevokeSession(ctx, sess.ID); err != nil {
+  			return err
+  		}
+  		_, err := tx.CreateSession(ctx, domain.CreateSessionParams{
+  			ID:               uuid.NewString(),
+  			UserID:           u.ID,
+  			RefreshTokenHash: hash.HashRefreshToken(refresh),
+  			ExpiresAt:        time.Now().Add(s.cfg.RefreshTTL),
+  		})
+  		return err
+  	}); err != nil {
+  		return Tokens{}, err
+  	}
 
-	access, err := jwt.GenerateAccess(u.ID, u.Role, s.cfg.JWTSecret, s.cfg.AccessTTL)
-	if err != nil {
-		return Tokens{}, err
-	}
-	refresh, err := jwt.GenerateRefreshToken()
-	if err != nil {
-		return Tokens{}, err
-	}
+  	return Tokens{
+  		AccessToken:  access,
+  		RefreshToken: refresh,
+  		ExpiresIn:    int(s.cfg.AccessTTL.Seconds()),
+  	}, nil
+  }
+  ```
+  > Token generation happens before the transaction so a CSPRNG/JWT error never leaves a revoked-but-unreplaced session. `issueTokens` is not reused for the rotation path because rotation must revoke and create atomically in one `ExecTx`.
 
-	if err := s.store.ExecTx(ctx, func(tx domain.Store) error {
-		if err := tx.RevokeSession(ctx, sess.ID); err != nil {
-			return err
-		}
-		_, err := tx.CreateSession(ctx, domain.CreateSessionParams{
-			ID:               uuid.NewString(),
-			UserID:           u.ID,
-			RefreshTokenHash: hash.HashRefreshToken(refresh),
-			ExpiresAt:        time.Now().Add(s.cfg.RefreshTTL),
-		})
-		return err
-	}); err != nil {
-		return Tokens{}, err
-	}
+- [ ] **Step 4: Run the test — expect PASS.** Run `cd backend && go test ./internal/app/auth/ -run TestRefresh 2>&1 | tail -n 20`. Expected PASS: valid rotation revokes old + issues new; replay of the old token is `ErrUnauthorized` AND revokes the live session; unknown token `ErrUnauthorized`; expired session `ErrUnauthorized`.
 
-	return Tokens{
-		AccessToken:  access,
-		RefreshToken: refresh,
-		ExpiresIn:    int(s.cfg.AccessTTL.Seconds()),
-	}, nil
-}
-```
+- [ ] **Step 5: Write failing handler test.** Create `backend/internal/adapter/httpapi/auth_refresh_test.go`:
+  ```go
+  package httpapi_test
 
-> Token generation happens before the transaction so a CSPRNG/JWT error never leaves a revoked-but-unreplaced session. `issueTokens` is not reused here because rotation must revoke and create atomically in one `ExecTx`.
+  import (
+  	"net/http"
+  	"testing"
 
-- [ ] **Step 4: Run the test — expect PASS.**
+  	"github.com/stretchr/testify/require"
+  )
 
-```bash
-cd backend && go test ./internal/app/auth/ -run TestRefresh 2>&1 | tail -n 20
-```
+  func TestRefreshHandler_Valid_200NewTokens(t *testing.T) {
+  	ta := newTestApp(t)
+  	seedVerifiedUser(t, ta.store, "uma", "uma@example.com", "umapassword1")
 
-Expected PASS: valid rotation revokes old + issues new, replay of the old token is `ErrUnauthorized`, unknown token `ErrUnauthorized`, expired session `ErrUnauthorized`.
+  	_, loginBody := doJSONBody(t, ta, http.MethodPost, "/api/auth/login",
+  		map[string]string{"identifier": "uma@example.com", "password": "umapassword1"})
+  	first := loginBody["data"].(map[string]any)["refreshToken"].(string)
 
-- [ ] **Step 5: Write failing handler test.**
+  	resp, body := doJSONBody(t, ta, http.MethodPost, "/api/auth/refresh",
+  		map[string]string{"refreshToken": first})
+  	require.Equal(t, http.StatusOK, resp.StatusCode)
+  	second := body["data"].(map[string]any)["refreshToken"].(string)
+  	require.NotEqual(t, first, second)
+  }
 
-```go
-// backend/internal/adapter/httpapi/auth_refresh_test.go
-package httpapi_test
+  func TestRefreshHandler_ReuseAfterRotation_401(t *testing.T) {
+  	ta := newTestApp(t)
+  	seedVerifiedUser(t, ta.store, "vic", "vic@example.com", "vicpassword1")
 
-import (
-	"net/http"
-	"testing"
+  	_, loginBody := doJSONBody(t, ta, http.MethodPost, "/api/auth/login",
+  		map[string]string{"identifier": "vic@example.com", "password": "vicpassword1"})
+  	first := loginBody["data"].(map[string]any)["refreshToken"].(string)
 
-	"github.com/stretchr/testify/require"
-)
+  	resp1, _ := doJSONBody(t, ta, http.MethodPost, "/api/auth/refresh",
+  		map[string]string{"refreshToken": first})
+  	require.Equal(t, http.StatusOK, resp1.StatusCode)
 
-func TestRefreshHandler_Valid_200NewTokens(t *testing.T) {
-	app, deps := newTestApp(t)
-	seedVerifiedUser(t, deps.store, "uma", "uma@example.com", "umapassword1")
+  	resp2, _ := doJSONBody(t, ta, http.MethodPost, "/api/auth/refresh",
+  		map[string]string{"refreshToken": first})
+  	require.Equal(t, http.StatusUnauthorized, resp2.StatusCode)
+  }
 
-	_, loginBody := doJSONBody(t, app, http.MethodPost, "/api/auth/login",
-		map[string]string{"identifier": "uma@example.com", "password": "umapassword1"})
-	first := loginBody["data"].(map[string]any)["refreshToken"].(string)
+  func TestRefreshHandler_BadBody_400(t *testing.T) {
+  	ta := newTestApp(t)
+  	resp := doRaw(t, ta, http.MethodPost, "/api/auth/refresh", "{bad")
+  	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+  }
+  ```
 
-	resp, body := doJSONBody(t, app, http.MethodPost, "/api/auth/refresh",
-		map[string]string{"refreshToken": first})
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-	second := body["data"].(map[string]any)["refreshToken"].(string)
-	require.NotEqual(t, first, second)
-}
+- [ ] **Step 6: Run the handler test — expect FAIL.** Run `cd backend && go test ./internal/adapter/httpapi/ -run TestRefreshHandler 2>&1 | tail -n 20`. Expected FAIL: 404 on `POST /api/auth/refresh` (route/handler missing).
 
-func TestRefreshHandler_ReuseAfterRotation_401(t *testing.T) {
-	app, deps := newTestApp(t)
-	seedVerifiedUser(t, deps.store, "vic", "vic@example.com", "vicpassword1")
+- [ ] **Step 7: Implement the refresh handler and wire the route.** Add to `backend/internal/adapter/httpapi/auth_handler.go`:
+  ```go
+  type RefreshReq struct {
+  	RefreshToken string `json:"refreshToken"`
+  }
 
-	_, loginBody := doJSONBody(t, app, http.MethodPost, "/api/auth/login",
-		map[string]string{"identifier": "vic@example.com", "password": "vicpassword1"})
-	first := loginBody["data"].(map[string]any)["refreshToken"].(string)
+  func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
+  	var req RefreshReq
+  	if err := c.BodyParser(&req); err != nil {
+  		return Fail(c, fiber.StatusBadRequest, "invalid request body")
+  	}
+  	if req.RefreshToken == "" {
+  		return Fail(c, fiber.StatusBadRequest, "refreshToken is required")
+  	}
+  	tok, err := h.svc.Refresh(c.Context(), req.RefreshToken)
+  	if err != nil {
+  		return mapAuthError(c, err)
+  	}
+  	return OK(c, TokensDTO{
+  		AccessToken:  tok.AccessToken,
+  		RefreshToken: tok.RefreshToken,
+  		ExpiresIn:    tok.ExpiresIn,
+  	})
+  }
+  ```
+  Wire the route in `router.go` (Task 19), inside the `/auth` group:
+  ```go
+  authGrp.Post("/refresh", rl(), deps.Auth.Refresh)
+  ```
+  > `mapAuthError` maps `domain.ErrUnauthorized` → 401 (per the contract). Reuse the existing `TokensDTO`.
 
-	resp1, _ := doJSONBody(t, app, http.MethodPost, "/api/auth/refresh",
-		map[string]string{"refreshToken": first})
-	require.Equal(t, http.StatusOK, resp1.StatusCode)
+- [ ] **Step 8: Run the handler test — expect PASS.** Run `cd backend && go test ./internal/adapter/httpapi/ -run TestRefreshHandler 2>&1 | tail -n 20`. Expected PASS: 200 new tokens (rotated), 401 on reuse of the rotated token, 400 on bad body.
 
-	resp2, _ := doJSONBody(t, app, http.MethodPost, "/api/auth/refresh",
-		map[string]string{"refreshToken": first})
-	require.Equal(t, http.StatusUnauthorized, resp2.StatusCode)
-}
-
-func TestRefreshHandler_BadBody_400(t *testing.T) {
-	app, _ := newTestApp(t)
-	resp := doRaw(t, app, http.MethodPost, "/api/auth/refresh", "{bad")
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
-```
-
-- [ ] **Step 6: Run the handler test — expect FAIL.**
-
-```bash
-cd backend && go test ./internal/adapter/httpapi/ -run TestRefreshHandler 2>&1 | tail -n 20
-```
-
-Expected FAIL: 404 on `POST /api/auth/refresh` (route/handler missing).
-
-- [ ] **Step 7: Implement the refresh handler and wire the route.**
-
-```go
-// backend/internal/adapter/httpapi/auth_handler.go  (add)
-type RefreshReq struct {
-	RefreshToken string `json:"refreshToken"`
-}
-
-func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
-	var req RefreshReq
-	if err := c.BodyParser(&req); err != nil {
-		return Fail(c, fiber.StatusBadRequest, "invalid request body")
-	}
-	if req.RefreshToken == "" {
-		return Fail(c, fiber.StatusBadRequest, "refreshToken is required")
-	}
-	tok, err := h.svc.Refresh(c.Context(), req.RefreshToken)
-	if err != nil {
-		return mapAuthError(c, err)
-	}
-	return OK(c, TokensDTO{
-		AccessToken:  tok.AccessToken,
-		RefreshToken: tok.RefreshToken,
-		ExpiresIn:    tok.ExpiresIn,
-	})
-}
-```
-
-```go
-// backend/internal/adapter/httpapi/router.go  (inside the /auth group)
-auth.Post("/refresh", RateLimit(rlMax, rlWindow), authHandler.Refresh)
-```
-
-> `mapAuthError` must map `domain.ErrUnauthorized` → 401 (per the contract). Reuse the existing `TokensDTO`.
-
-- [ ] **Step 8: Run the handler test — expect PASS.**
-
-```bash
-cd backend && go test ./internal/adapter/httpapi/ -run TestRefreshHandler 2>&1 | tail -n 20
-```
-
-Expected PASS: 200 new tokens (rotated), 401 on reuse of the rotated token, 400 on bad body.
-
-- [ ] **Step 9: Vet and commit.**
-
-```bash
-cd backend && go vet ./... && go test ./internal/app/auth/ ./internal/adapter/httpapi/ -run 'Refresh' 2>&1 | tail -n 5
-git add -A && git commit -m "feat: add refresh endpoint with rotating revocable tokens"
-```
+- [ ] **Step 9: Vet and commit.** Run `cd backend && go vet ./... && go test ./internal/app/auth/ ./internal/adapter/httpapi/ -run 'Refresh' 2>&1 | tail -n 5`, then `git add -A && git commit -m "feat: add refresh endpoint with rotating revocable tokens and theft response"` (no `Co-Authored-By` trailer).
 
 ---
 
-### Task 16: `AuthService.Logout` + handler (idempotent revoke)
+### Task 17: `AuthService.Logout` + handler (idempotent revoke)
 
 **Files:**
 - Modify: `backend/internal/app/auth/service.go`
@@ -3465,206 +3820,334 @@ git add -A && git commit -m "feat: add refresh endpoint with rotating revocable 
 **Interfaces:**
 - Consumes (from earlier tasks):
   - `domain.Store`: `GetSessionByTokenHash`, `RevokeSession`
-  - `hash.HashRefreshToken(raw string) string`
-  - `Service.Login`, `Service.Refresh` (Tasks 14-15, used by tests)
-  - `domain.ErrNotFound`
+  - `hash.HashRefreshToken`
+  - `Service.Login`, `Service.Refresh` (Tasks 15–16, used by tests)
+  - `domain.ErrNotFound`, `domain.ErrUnauthorized`
+  - the shared harness seeders + `doJSONBody`/`doRaw` (Task 11)
 - Produces (later tasks rely on):
   - `func (s *Service) Logout(ctx context.Context, refreshToken string) error`
   - HTTP route `POST /api/auth/logout`, request DTO `LogoutReq{refreshToken}`
 
-- [ ] **Step 1: Write failing service test: revoke + idempotency.**
+- [ ] **Step 1: Write failing service test: revoke + idempotency.** Create `backend/internal/app/auth/logout_test.go`:
+  ```go
+  package auth_test
 
-```go
-// backend/internal/app/auth/logout_test.go
-package auth_test
+  import (
+  	"context"
+  	"testing"
 
-import (
-	"context"
-	"testing"
+  	"github.com/stretchr/testify/require"
 
-	"github.com/stretchr/testify/require"
+  	"github.com/zulkhair/pustaka/backend/internal/app/auth"
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
+  )
 
-	"github.com/zulkhair/pustaka/backend/internal/app/auth"
-	"github.com/zulkhair/pustaka/backend/internal/domain"
-	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
-)
+  func TestLogout_RevokesSession(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	ctx := context.Background()
+  	seedVerifiedUserSvc(t, store, "walt", "walt@example.com", "waltpassword1")
 
-func TestLogout_RevokesSession(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
-	ctx := context.Background()
-	seedVerifiedUser(t, store, "walt", "walt@example.com", "waltpassword1")
+  	tok, err := svc.Login(ctx, auth.LoginInput{Identifier: "walt@example.com", Password: "waltpassword1"})
+  	require.NoError(t, err)
 
-	tok, err := svc.Login(ctx, auth.LoginInput{Identifier: "walt@example.com", Password: "waltpassword1"})
-	require.NoError(t, err)
+  	require.NoError(t, svc.Logout(ctx, tok.RefreshToken))
 
-	require.NoError(t, svc.Logout(ctx, tok.RefreshToken))
+  	sess, err := store.GetSessionByTokenHash(ctx, hash.HashRefreshToken(tok.RefreshToken))
+  	require.NoError(t, err)
+  	require.NotNil(t, sess.RevokedAt, "session must be revoked after logout")
+  }
 
-	sess, err := store.GetSessionByTokenHash(ctx, hash.HashRefreshToken(tok.RefreshToken))
-	require.NoError(t, err)
-	require.NotNil(t, sess.RevokedAt, "session must be revoked after logout")
-}
+  func TestLogout_ThenRefresh_Unauthorized(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	ctx := context.Background()
+  	seedVerifiedUserSvc(t, store, "xena", "xena@example.com", "xenapassword1")
 
-func TestLogout_ThenRefresh_Unauthorized(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
-	ctx := context.Background()
-	seedVerifiedUser(t, store, "xena", "xena@example.com", "xenapassword1")
+  	tok, err := svc.Login(ctx, auth.LoginInput{Identifier: "xena@example.com", Password: "xenapassword1"})
+  	require.NoError(t, err)
+  	require.NoError(t, svc.Logout(ctx, tok.RefreshToken))
 
-	tok, err := svc.Login(ctx, auth.LoginInput{Identifier: "xena@example.com", Password: "xenapassword1"})
-	require.NoError(t, err)
-	require.NoError(t, svc.Logout(ctx, tok.RefreshToken))
+  	_, err = svc.Refresh(ctx, tok.RefreshToken)
+  	require.ErrorIs(t, err, domain.ErrUnauthorized)
+  }
 
-	_, err = svc.Refresh(ctx, tok.RefreshToken)
-	require.ErrorIs(t, err, domain.ErrUnauthorized)
-}
+  func TestLogout_UnknownToken_Idempotent(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
 
-func TestLogout_UnknownToken_Idempotent(t *testing.T) {
-	store := newTestStore(t)
-	svc := newLoginService(t, store)
+  	err := svc.Logout(context.Background(), "never-issued-token")
+  	require.NoError(t, err) // idempotent: unknown token still succeeds
+  }
+  ```
 
-	err := svc.Logout(context.Background(), "never-issued-token")
-	require.NoError(t, err) // idempotent: unknown token still succeeds
-}
-```
+- [ ] **Step 2: Run the test — expect FAIL.** Run `cd backend && go test ./internal/app/auth/ -run TestLogout 2>&1 | tail -n 20`. Expected FAIL: `undefined: (*auth.Service).Logout`.
 
-- [ ] **Step 2: Run the test — expect FAIL.**
+- [ ] **Step 3: Implement `Logout` (idempotent).** Append to `backend/internal/app/auth/service.go`:
+  ```go
+  func (s *Service) Logout(ctx context.Context, refreshToken string) error {
+  	sess, err := s.store.GetSessionByTokenHash(ctx, hash.HashRefreshToken(refreshToken))
+  	if err != nil {
+  		if errors.Is(err, domain.ErrNotFound) {
+  			return nil // idempotent: unknown token is a successful no-op
+  		}
+  		return err
+  	}
+  	return s.store.RevokeSession(ctx, sess.ID)
+  }
+  ```
 
-```bash
-cd backend && go test ./internal/app/auth/ -run TestLogout 2>&1 | tail -n 20
-```
+- [ ] **Step 4: Run the test — expect PASS.** Run `cd backend && go test ./internal/app/auth/ -run TestLogout 2>&1 | tail -n 20`. Expected PASS: logout revokes the session, a subsequent refresh is `ErrUnauthorized`, unknown token returns nil.
 
-Expected FAIL: `undefined: (*auth.Service).Logout`.
+- [ ] **Step 5: Write failing handler test.** Create `backend/internal/adapter/httpapi/auth_logout_test.go`:
+  ```go
+  package httpapi_test
 
-- [ ] **Step 3: Implement `Logout` (idempotent).**
+  import (
+  	"net/http"
+  	"testing"
 
-```go
-// backend/internal/app/auth/service.go  (add)
-func (s *Service) Logout(ctx context.Context, refreshToken string) error {
-	sess, err := s.store.GetSessionByTokenHash(ctx, hash.HashRefreshToken(refreshToken))
-	if err != nil {
-		if errors.Is(err, domain.ErrNotFound) {
-			return nil // idempotent: unknown token is a successful no-op
-		}
-		return err
-	}
-	return s.store.RevokeSession(ctx, sess.ID)
-}
-```
+  	"github.com/stretchr/testify/require"
+  )
 
-- [ ] **Step 4: Run the test — expect PASS.**
+  func TestLogoutHandler_RevokesThenRefresh401(t *testing.T) {
+  	ta := newTestApp(t)
+  	seedVerifiedUser(t, ta.store, "yuri", "yuri@example.com", "yuripassword1")
 
-```bash
-cd backend && go test ./internal/app/auth/ -run TestLogout 2>&1 | tail -n 20
-```
+  	_, loginBody := doJSONBody(t, ta, http.MethodPost, "/api/auth/login",
+  		map[string]string{"identifier": "yuri@example.com", "password": "yuripassword1"})
+  	rt := loginBody["data"].(map[string]any)["refreshToken"].(string)
 
-Expected PASS: logout revokes the session, a subsequent refresh is `ErrUnauthorized`, unknown token returns nil.
+  	resp, _ := doJSONBody(t, ta, http.MethodPost, "/api/auth/logout",
+  		map[string]string{"refreshToken": rt})
+  	require.Equal(t, http.StatusOK, resp.StatusCode)
 
-- [ ] **Step 5: Write failing handler test.**
+  	resp2, _ := doJSONBody(t, ta, http.MethodPost, "/api/auth/refresh",
+  		map[string]string{"refreshToken": rt})
+  	require.Equal(t, http.StatusUnauthorized, resp2.StatusCode)
+  }
 
-```go
-// backend/internal/adapter/httpapi/auth_logout_test.go
-package httpapi_test
+  func TestLogoutHandler_UnknownToken_200(t *testing.T) {
+  	ta := newTestApp(t)
+  	resp, _ := doJSONBody(t, ta, http.MethodPost, "/api/auth/logout",
+  		map[string]string{"refreshToken": "never-issued"})
+  	require.Equal(t, http.StatusOK, resp.StatusCode)
+  }
 
-import (
-	"net/http"
-	"testing"
+  func TestLogoutHandler_BadBody_400(t *testing.T) {
+  	ta := newTestApp(t)
+  	resp := doRaw(t, ta, http.MethodPost, "/api/auth/logout", "}{")
+  	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+  }
+  ```
 
-	"github.com/stretchr/testify/require"
-)
+- [ ] **Step 6: Run the handler test — expect FAIL.** Run `cd backend && go test ./internal/adapter/httpapi/ -run TestLogoutHandler 2>&1 | tail -n 20`. Expected FAIL: 404 on `POST /api/auth/logout` (route/handler missing).
 
-func TestLogoutHandler_RevokesThenRefresh401(t *testing.T) {
-	app, deps := newTestApp(t)
-	seedVerifiedUser(t, deps.store, "yuri", "yuri@example.com", "yuripassword1")
+- [ ] **Step 7: Implement the logout handler and wire the route.** Add to `backend/internal/adapter/httpapi/auth_handler.go`:
+  ```go
+  type LogoutReq struct {
+  	RefreshToken string `json:"refreshToken"`
+  }
 
-	_, loginBody := doJSONBody(t, app, http.MethodPost, "/api/auth/login",
-		map[string]string{"identifier": "yuri@example.com", "password": "yuripassword1"})
-	rt := loginBody["data"].(map[string]any)["refreshToken"].(string)
+  func (h *AuthHandler) Logout(c *fiber.Ctx) error {
+  	var req LogoutReq
+  	if err := c.BodyParser(&req); err != nil {
+  		return Fail(c, fiber.StatusBadRequest, "invalid request body")
+  	}
+  	if req.RefreshToken == "" {
+  		return Fail(c, fiber.StatusBadRequest, "refreshToken is required")
+  	}
+  	if err := h.svc.Logout(c.Context(), req.RefreshToken); err != nil {
+  		return mapAuthError(c, err)
+  	}
+  	return OK(c, nil)
+  }
+  ```
+  Wire the route in `router.go` (Task 19), inside the `/auth` group:
+  ```go
+  authGrp.Post("/logout", rl(), deps.Auth.Logout)
+  ```
 
-	resp, _ := doJSONBody(t, app, http.MethodPost, "/api/auth/logout",
-		map[string]string{"refreshToken": rt})
-	require.Equal(t, http.StatusOK, resp.StatusCode)
+- [ ] **Step 8: Run the handler test — expect PASS.** Run `cd backend && go test ./internal/adapter/httpapi/ -run TestLogoutHandler 2>&1 | tail -n 20`. Expected PASS: logout returns 200 then refresh is 401, unknown token returns 200, bad body returns 400.
 
-	resp2, _ := doJSONBody(t, app, http.MethodPost, "/api/auth/refresh",
-		map[string]string{"refreshToken": rt})
-	require.Equal(t, http.StatusUnauthorized, resp2.StatusCode)
-}
+- [ ] **Step 9: Full vet + full auth/httpapi suite, then commit.** Run `cd backend && go vet ./... && go test ./internal/app/auth/ ./internal/adapter/httpapi/ 2>&1 | tail -n 10`, then `git add -A && git commit -m "feat: add idempotent logout endpoint that revokes the session"` (no `Co-Authored-By` trailer).
 
-func TestLogoutHandler_UnknownToken_200(t *testing.T) {
-	app, _ := newTestApp(t)
-	resp, _ := doJSONBody(t, app, http.MethodPost, "/api/auth/logout",
-		map[string]string{"refreshToken": "never-issued"})
-	require.Equal(t, http.StatusOK, resp.StatusCode)
-}
+---
 
-func TestLogoutHandler_BadBody_400(t *testing.T) {
-	app, _ := newTestApp(t)
-	resp := doRaw(t, app, http.MethodPost, "/api/auth/logout", "}{")
-	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
-```
+### Task 18: `AuthService.Me` + handler
 
-- [ ] **Step 6: Run the handler test — expect FAIL.**
+**Files:**
+- Modify: `backend/internal/app/auth/service.go` (add `Me`)
+- Modify: `backend/internal/adapter/httpapi/auth_handler.go` (add `Me` + `MeDTO`)
+- Modify: `backend/internal/adapter/httpapi/router.go` (wire `GET /api/auth/me` behind `RequireAuth`)
+- Test: `backend/internal/app/auth/me_test.go`
+- Test: `backend/internal/adapter/httpapi/auth_me_test.go`
 
-```bash
-cd backend && go test ./internal/adapter/httpapi/ -run TestLogoutHandler 2>&1 | tail -n 20
-```
+**Interfaces:**
+- Consumes (from earlier tasks):
+  - `domain.Store`: `GetUserByID`; `domain.ErrNotFound`; `domain.User`
+  - `middleware.RequireAuth(secret string) fiber.Handler` (Task 19) — it sets `c.Locals("userID", ...)`
+  - the shared harness `newTestApp` + seeders + `jwt.GenerateAccess` (Tasks 11, 8)
+- Produces (later tasks rely on these VERBATIM):
+  - `func (s *Service) Me(ctx context.Context, userID string) (domain.User, error)` — `GetUserByID`, mapping not-found → `domain.ErrNotFound`
+  - `func (h *AuthHandler) Me(c *fiber.Ctx) error` — reads `c.Locals("userID")`, returns `MeDTO`
+  - `type MeDTO struct { ID, Username, Email, Role string; EmailVerified bool }` (JSON `id,username,email,role,emailVerified`)
+  - the router wires `GET /api/auth/me` with `RequireAuth`
 
-Expected FAIL: 404 on `POST /api/auth/logout` (route/handler missing).
+> Sequencing note: this task references `middleware.RequireAuth` (Task 19) and `httpapi.Mount`/`BuildApp` (Task 22) for its HTTP test. The SERVICE-level `Me` test (Step 1) is independent and runs now; the HTTP-level `Me` test runs once Task 19's middleware and Task 22's wiring are present. The router wiring snippet for `/auth/me` (Step 7) is added to `Mount` in Task 19; if Task 19 already includes it from Task 19's own snippet, this step is a confirm-only no-op.
 
-- [ ] **Step 7: Implement the logout handler and wire the route.**
+- [ ] **Step 1: Write the failing service test.** Create `backend/internal/app/auth/me_test.go`:
+  ```go
+  package auth_test
 
-```go
-// backend/internal/adapter/httpapi/auth_handler.go  (add)
-type LogoutReq struct {
-	RefreshToken string `json:"refreshToken"`
-}
+  import (
+  	"context"
+  	"testing"
 
-func (h *AuthHandler) Logout(c *fiber.Ctx) error {
-	var req LogoutReq
-	if err := c.BodyParser(&req); err != nil {
-		return Fail(c, fiber.StatusBadRequest, "invalid request body")
-	}
-	if req.RefreshToken == "" {
-		return Fail(c, fiber.StatusBadRequest, "refreshToken is required")
-	}
-	if err := h.svc.Logout(c.Context(), req.RefreshToken); err != nil {
-		return mapAuthError(c, err)
-	}
-	return OK(c, nil)
-}
-```
+  	"github.com/stretchr/testify/require"
 
-```go
-// backend/internal/adapter/httpapi/router.go  (inside the /auth group)
-auth.Post("/logout", RateLimit(rlMax, rlWindow), authHandler.Logout)
-```
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  )
 
-- [ ] **Step 8: Run the handler test — expect PASS.**
+  func TestMe_ReturnsUser(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
+  	u := seedVerifiedUserSvc(t, store, "mia", "mia@example.com", "miapassword1")
 
-```bash
-cd backend && go test ./internal/adapter/httpapi/ -run TestLogoutHandler 2>&1 | tail -n 20
-```
+  	got, err := svc.Me(context.Background(), u.ID)
+  	require.NoError(t, err)
+  	require.Equal(t, u.ID, got.ID)
+  	require.Equal(t, "mia", got.Username)
+  	require.Equal(t, "mia@example.com", got.Email)
+  	require.True(t, got.EmailVerified)
+  }
 
-Expected PASS: logout returns 200 then refresh is 401, unknown token returns 200, bad body returns 400.
+  func TestMe_UnknownUser_NotFound(t *testing.T) {
+  	store, cleanup := newTestStore(t)
+  	defer cleanup()
+  	svc := newLoginService(t, store)
 
-- [ ] **Step 9: Full vet + full auth/httpapi suite, then commit.**
+  	_, err := svc.Me(context.Background(), "no-such-id")
+  	require.ErrorIs(t, err, domain.ErrNotFound)
+  }
+  ```
 
-```bash
-cd backend && go vet ./... && go test ./internal/app/auth/ ./internal/adapter/httpapi/ 2>&1 | tail -n 10
-git add -A && git commit -m "feat: add idempotent logout endpoint that revokes the session"
-```
+- [ ] **Step 2: Run the test — expect FAIL.** Run `cd backend && go test ./internal/app/auth/ -run TestMe 2>&1 | tail -n 20`. Expected FAIL: `undefined: (*auth.Service).Me`.
 
-## Cluster E — HTTP middleware, wiring & E2E (Tasks 17-20)
+- [ ] **Step 3: Implement `Me`.** Append to `backend/internal/app/auth/service.go`:
+  ```go
+  func (s *Service) Me(ctx context.Context, userID string) (domain.User, error) {
+  	u, err := s.store.GetUserByID(ctx, userID)
+  	if err != nil {
+  		if errors.Is(err, domain.ErrNotFound) {
+  			return domain.User{}, domain.ErrNotFound
+  		}
+  		return domain.User{}, err
+  	}
+  	return u, nil
+  }
+  ```
 
-> Depends on: `pkg/jwt` (`ParseAccess`, `GenerateAccess`, `Claims`), `pkg/hash`, `internal/config.Load`, `internal/domain` (ports/entities/errors), `internal/app/auth` (`Service`, inputs, `Tokens`), `internal/adapter/store` (`Store` + `New(pool)`), `internal/adapter/mail` (`NewResend`, `MockMailer`). Use those exact signatures; do not redefine them.
+- [ ] **Step 4: Run the test — expect PASS.** Run `cd backend && go test ./internal/app/auth/ -run TestMe 2>&1 | tail -n 20`. Expected PASS: known id returns the user, unknown id returns `domain.ErrNotFound`.
 
-### Task 17: Auth & admin middleware (`RequireAuth`, `RequireAdmin`)
+- [ ] **Step 5: Write the failing handler test.** Create `backend/internal/adapter/httpapi/auth_me_test.go`. It logs in to get an access token, then calls `GET /api/auth/me` with the Bearer token:
+  ```go
+  package httpapi_test
+
+  import (
+  	"io"
+  	"net/http"
+  	"net/http/httptest"
+  	"testing"
+
+  	"github.com/stretchr/testify/require"
+  )
+
+  func TestMeHandler_NoToken_401(t *testing.T) {
+  	ta := newTestApp(t)
+  	req := httptest.NewRequest("GET", "/api/auth/me", nil)
+  	resp, err := ta.app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+  }
+
+  func TestMeHandler_ValidToken_200(t *testing.T) {
+  	ta := newTestApp(t)
+  	seedVerifiedUser(t, ta.store, "nadia", "nadia@example.com", "nadiapassword1")
+
+  	_, loginBody := doJSONBody(t, ta, http.MethodPost, "/api/auth/login",
+  		map[string]string{"identifier": "nadia@example.com", "password": "nadiapassword1"})
+  	access := loginBody["data"].(map[string]any)["accessToken"].(string)
+
+  	req := httptest.NewRequest("GET", "/api/auth/me", nil)
+  	req.Header.Set("Authorization", "Bearer "+access)
+  	resp, err := ta.app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, http.StatusOK, resp.StatusCode)
+
+  	body, _ := io.ReadAll(resp.Body)
+  	require.Contains(t, string(body), "nadia")
+  	require.Contains(t, string(body), "nadia@example.com")
+  	require.Contains(t, string(body), `"emailVerified":true`)
+  }
+  ```
+
+- [ ] **Step 6: Run the handler test — expect FAIL.** Run `cd backend && go test ./internal/adapter/httpapi/ -run TestMeHandler 2>&1 | tail -n 20`. Expected FAIL: `undefined: (*AuthHandler).Me` / `undefined: MeDTO` (and 404/route until wired).
+
+- [ ] **Step 7: Implement the `Me` handler + DTO and confirm the route.** Add to `backend/internal/adapter/httpapi/auth_handler.go`:
+  ```go
+  type MeDTO struct {
+  	ID            string `json:"id"`
+  	Username      string `json:"username"`
+  	Email         string `json:"email"`
+  	Role          string `json:"role"`
+  	EmailVerified bool   `json:"emailVerified"`
+  }
+
+  func (h *AuthHandler) Me(c *fiber.Ctx) error {
+  	userID, _ := c.Locals("userID").(string)
+  	if userID == "" {
+  		return Fail(c, fiber.StatusUnauthorized, "unauthorized")
+  	}
+  	u, err := h.svc.Me(c.Context(), userID)
+  	if err != nil {
+  		return mapAuthError(c, err)
+  	}
+  	return OK(c, MeDTO{
+  		ID:            u.ID,
+  		Username:      u.Username,
+  		Email:         u.Email,
+  		Role:          u.Role,
+  		EmailVerified: u.EmailVerified,
+  	})
+  }
+  ```
+  Confirm the route is wired in `router.go` (Task 19) inside the `/auth` group (added there as part of Task 19's `Mount` body):
+  ```go
+  authGrp.Get("/me", middleware.RequireAuth(deps.JWTSecret), deps.Auth.Me)
+  ```
+
+- [ ] **Step 8: Run the handler test — expect PASS.** Run `cd backend && go test ./internal/adapter/httpapi/ -run TestMeHandler 2>&1 | tail -n 20`. Expected PASS: no token → 401; valid token → 200 with `id/username/email/role/emailVerified`.
+
+- [ ] **Step 9: Vet and commit.** Run `cd backend && go vet ./... && go test ./internal/app/auth/ ./internal/adapter/httpapi/ -run 'Me' 2>&1 | tail -n 5`, then `git add -A && git commit -m "feat(auth): add Me use-case, handler, and MeDTO"` (no `Co-Authored-By` trailer).
+
+---
+
+## Cluster E — HTTP middleware, wiring & E2E (Tasks 19–22)
+
+> Depends on: `pkg/jwt` (`ParseAccess`, `GenerateAccess`, `Claims`), `pkg/hash`, `internal/config.Load`, `internal/domain` (ports/entities/errors), `internal/app/auth` (`Service`, inputs, `Tokens`, `Me`), `internal/adapter/store` (`Store` + `New(pool)` + `RunMigrations` + `OpenPool`), `internal/adapter/mail` (`NewResendMailer`, `MockMailer`). Use those exact signatures; do not redefine them.
+
+### Task 19: Auth & admin middleware (`RequireAuth`, `RequireAdmin`)
 
 **Files:**
 - Create: `backend/internal/adapter/httpapi/middleware/auth.go`
 - Test: `backend/internal/adapter/httpapi/middleware/auth_test.go`
-- Consumes (existing): `backend/internal/adapter/httpapi/response.go` (`httpapi.Fail`) — if `response.go` is not yet present from Task 19, this task may define a temporary local 401/403 writer; prefer ordering Task 19's `response.go` first. Assume `httpapi.Fail` exists.
+- Consumes (existing): `backend/internal/adapter/httpapi/response.go` (`httpapi.Fail`). `response.go` is created in Task 21; if running this task first, either order Task 21's `response.go` ahead of it, or note the `httpapi.Fail` dependency explicitly. Assume `httpapi.Fail` exists.
 
 **Interfaces:**
 - Consumes:
@@ -3677,170 +4160,170 @@ git add -A && git commit -m "feat: add idempotent logout endpoint that revokes t
   - `func RequireAdmin() fiber.Handler` — `Fail(c, 403, ...)` unless `c.Locals("role") == domain.RoleAdmin`, else `c.Next()`.
 
 - [ ] **Step 1: Write the failing test for `RequireAuth` (no token, bad token, good token).** Create `backend/internal/adapter/httpapi/middleware/auth_test.go`. Build a Fiber app with the middleware mounted on a probe route that echoes the locals. No Postgres needed.
-```go
-package middleware_test
+  ```go
+  package middleware_test
 
-import (
-	"io"
-	"net/http/httptest"
-	"testing"
-	"time"
+  import (
+  	"io"
+  	"net/http/httptest"
+  	"testing"
+  	"time"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/stretchr/testify/require"
+  	"github.com/gofiber/fiber/v2"
+  	"github.com/stretchr/testify/require"
 
-	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi/middleware"
-	"github.com/zulkhair/pustaka/backend/internal/domain"
-	"github.com/zulkhair/pustaka/backend/internal/pkg/jwt"
-)
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi/middleware"
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/pkg/jwt"
+  )
 
-const testSecret = "test-secret-0123456789"
+  const testSecret = "test-secret-0123456789"
 
-func newProbeApp() *fiber.App {
-	app := fiber.New()
-	app.Get("/protected", middleware.RequireAuth(testSecret), func(c *fiber.Ctx) error {
-		return c.JSON(fiber.Map{
-			"userID": c.Locals("userID"),
-			"role":   c.Locals("role"),
-		})
-	})
-	app.Get("/admin", middleware.RequireAuth(testSecret), middleware.RequireAdmin(), func(c *fiber.Ctx) error {
-		return c.SendString("admin-ok")
-	})
-	return app
-}
+  func newProbeApp() *fiber.App {
+  	app := fiber.New()
+  	app.Get("/protected", middleware.RequireAuth(testSecret), func(c *fiber.Ctx) error {
+  		return c.JSON(fiber.Map{
+  			"userID": c.Locals("userID"),
+  			"role":   c.Locals("role"),
+  		})
+  	})
+  	app.Get("/admin", middleware.RequireAuth(testSecret), middleware.RequireAdmin(), func(c *fiber.Ctx) error {
+  		return c.SendString("admin-ok")
+  	})
+  	return app
+  }
 
-func TestRequireAuth_NoToken_401(t *testing.T) {
-	app := newProbeApp()
-	req := httptest.NewRequest("GET", "/protected", nil)
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	require.Equal(t, 401, resp.StatusCode)
-}
+  func TestRequireAuth_NoToken_401(t *testing.T) {
+  	app := newProbeApp()
+  	req := httptest.NewRequest("GET", "/protected", nil)
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 401, resp.StatusCode)
+  }
 
-func TestRequireAuth_BadToken_401(t *testing.T) {
-	app := newProbeApp()
-	req := httptest.NewRequest("GET", "/protected", nil)
-	req.Header.Set("Authorization", "Bearer not-a-jwt")
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	require.Equal(t, 401, resp.StatusCode)
-}
+  func TestRequireAuth_BadToken_401(t *testing.T) {
+  	app := newProbeApp()
+  	req := httptest.NewRequest("GET", "/protected", nil)
+  	req.Header.Set("Authorization", "Bearer not-a-jwt")
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 401, resp.StatusCode)
+  }
 
-func TestRequireAuth_GoodToken_SetsLocals(t *testing.T) {
-	app := newProbeApp()
-	token, err := jwt.GenerateAccess("user-123", domain.RoleUser, testSecret, 15*time.Minute)
-	require.NoError(t, err)
+  func TestRequireAuth_GoodToken_SetsLocals(t *testing.T) {
+  	app := newProbeApp()
+  	token, err := jwt.GenerateAccess("user-123", domain.RoleUser, testSecret, 15*time.Minute)
+  	require.NoError(t, err)
 
-	req := httptest.NewRequest("GET", "/protected", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode)
+  	req := httptest.NewRequest("GET", "/protected", nil)
+  	req.Header.Set("Authorization", "Bearer "+token)
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 200, resp.StatusCode)
 
-	body, _ := io.ReadAll(resp.Body)
-	require.Contains(t, string(body), "user-123")
-	require.Contains(t, string(body), domain.RoleUser)
-}
-```
+  	body, _ := io.ReadAll(resp.Body)
+  	require.Contains(t, string(body), "user-123")
+  	require.Contains(t, string(body), domain.RoleUser)
+  }
+  ```
 
 - [ ] **Step 2: Run the test, expect FAIL (compile error: package `middleware` has no `RequireAuth`/`RequireAdmin`).** Run from `backend/`:
-```bash
-go test ./internal/adapter/httpapi/middleware/ -run TestRequireAuth
-```
-Expected: build failure — `undefined: middleware.RequireAuth` (and `RequireAdmin`), so all three tests fail to compile.
+  ```bash
+  go test ./internal/adapter/httpapi/middleware/ -run TestRequireAuth
+  ```
+  Expected: build failure — `undefined: middleware.RequireAuth` (and `RequireAdmin`), so all three tests fail to compile.
 
 - [ ] **Step 3: Write the failing test for `RequireAdmin` (admin allowed, user blocked).** Append to `auth_test.go`:
-```go
-func TestRequireAdmin_AdminAllowed(t *testing.T) {
-	app := newProbeApp()
-	token, err := jwt.GenerateAccess("admin-1", domain.RoleAdmin, testSecret, 15*time.Minute)
-	require.NoError(t, err)
+  ```go
+  func TestRequireAdmin_AdminAllowed(t *testing.T) {
+  	app := newProbeApp()
+  	token, err := jwt.GenerateAccess("admin-1", domain.RoleAdmin, testSecret, 15*time.Minute)
+  	require.NoError(t, err)
 
-	req := httptest.NewRequest("GET", "/admin", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode)
-	body, _ := io.ReadAll(resp.Body)
-	require.Equal(t, "admin-ok", string(body))
-}
+  	req := httptest.NewRequest("GET", "/admin", nil)
+  	req.Header.Set("Authorization", "Bearer "+token)
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 200, resp.StatusCode)
+  	body, _ := io.ReadAll(resp.Body)
+  	require.Equal(t, "admin-ok", string(body))
+  }
 
-func TestRequireAdmin_UserBlocked_403(t *testing.T) {
-	app := newProbeApp()
-	token, err := jwt.GenerateAccess("user-2", domain.RoleUser, testSecret, 15*time.Minute)
-	require.NoError(t, err)
+  func TestRequireAdmin_UserBlocked_403(t *testing.T) {
+  	app := newProbeApp()
+  	token, err := jwt.GenerateAccess("user-2", domain.RoleUser, testSecret, 15*time.Minute)
+  	require.NoError(t, err)
 
-	req := httptest.NewRequest("GET", "/admin", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	require.Equal(t, 403, resp.StatusCode)
-}
-```
+  	req := httptest.NewRequest("GET", "/admin", nil)
+  	req.Header.Set("Authorization", "Bearer "+token)
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 403, resp.StatusCode)
+  }
+  ```
 
 - [ ] **Step 4: Implement `auth.go` (minimal, real).** Create `backend/internal/adapter/httpapi/middleware/auth.go`:
-```go
-package middleware
+  ```go
+  package middleware
 
-import (
-	"strings"
+  import (
+  	"strings"
 
-	"github.com/gofiber/fiber/v2"
+  	"github.com/gofiber/fiber/v2"
 
-	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
-	"github.com/zulkhair/pustaka/backend/internal/domain"
-	"github.com/zulkhair/pustaka/backend/internal/pkg/jwt"
-)
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/pkg/jwt"
+  )
 
-// RequireAuth validates a Bearer access JWT and stores the principal in c.Locals.
-func RequireAuth(secret string) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		authz := c.Get("Authorization")
-		const prefix = "Bearer "
-		if len(authz) <= len(prefix) || !strings.EqualFold(authz[:len(prefix)], prefix) {
-			return httpapi.Fail(c, fiber.StatusUnauthorized, "missing or malformed authorization header")
-		}
-		token := strings.TrimSpace(authz[len(prefix):])
-		claims, err := jwt.ParseAccess(token, secret)
-		if err != nil {
-			return httpapi.Fail(c, fiber.StatusUnauthorized, "invalid or expired token")
-		}
-		c.Locals("userID", claims.UserID)
-		c.Locals("role", claims.Role)
-		return c.Next()
-	}
-}
+  // RequireAuth validates a Bearer access JWT and stores the principal in c.Locals.
+  func RequireAuth(secret string) fiber.Handler {
+  	return func(c *fiber.Ctx) error {
+  		authz := c.Get("Authorization")
+  		const prefix = "Bearer "
+  		if len(authz) <= len(prefix) || !strings.EqualFold(authz[:len(prefix)], prefix) {
+  			return httpapi.Fail(c, fiber.StatusUnauthorized, "missing or malformed authorization header")
+  		}
+  		token := strings.TrimSpace(authz[len(prefix):])
+  		claims, err := jwt.ParseAccess(token, secret)
+  		if err != nil {
+  			return httpapi.Fail(c, fiber.StatusUnauthorized, "invalid or expired token")
+  		}
+  		c.Locals("userID", claims.UserID)
+  		c.Locals("role", claims.Role)
+  		return c.Next()
+  	}
+  }
 
-// RequireAdmin allows the request only when the principal's role is admin.
-// It must run after RequireAuth so that c.Locals("role") is populated.
-func RequireAdmin() fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		role, _ := c.Locals("role").(string)
-		if role != domain.RoleAdmin {
-			return httpapi.Fail(c, fiber.StatusForbidden, "admin access required")
-		}
-		return c.Next()
-	}
-}
-```
+  // RequireAdmin allows the request only when the principal's role is admin.
+  // It must run after RequireAuth so that c.Locals("role") is populated.
+  func RequireAdmin() fiber.Handler {
+  	return func(c *fiber.Ctx) error {
+  		role, _ := c.Locals("role").(string)
+  		if role != domain.RoleAdmin {
+  			return httpapi.Fail(c, fiber.StatusForbidden, "admin access required")
+  		}
+  		return c.Next()
+  	}
+  }
+  ```
 
 - [ ] **Step 5: Run the tests, expect PASS.** Run from `backend/`:
-```bash
-go vet ./internal/adapter/httpapi/middleware/
-go test ./internal/adapter/httpapi/middleware/ -run 'TestRequireAuth|TestRequireAdmin' -v
-```
-Expected: all five subtests PASS (`TestRequireAuth_NoToken_401`, `_BadToken_401`, `_GoodToken_SetsLocals`, `TestRequireAdmin_AdminAllowed`, `_UserBlocked_403`).
+  ```bash
+  go vet ./internal/adapter/httpapi/middleware/
+  go test ./internal/adapter/httpapi/middleware/ -run 'TestRequireAuth|TestRequireAdmin' -v
+  ```
+  Expected: all five subtests PASS (`TestRequireAuth_NoToken_401`, `_BadToken_401`, `_GoodToken_SetsLocals`, `TestRequireAdmin_AdminAllowed`, `_UserBlocked_403`).
 
 - [ ] **Step 6: Commit.**
-```bash
-git add backend/internal/adapter/httpapi/middleware/auth.go backend/internal/adapter/httpapi/middleware/auth_test.go
-git commit -m "feat(httpapi): add RequireAuth and RequireAdmin middleware"
-```
+  ```bash
+  git add backend/internal/adapter/httpapi/middleware/auth.go backend/internal/adapter/httpapi/middleware/auth_test.go
+  git commit -m "feat(httpapi): add RequireAuth and RequireAdmin middleware"
+  ```
 
 ---
 
-### Task 18: In-memory rate-limit middleware (`RateLimit`)
+### Task 20: In-memory rate-limit middleware (`RateLimit`)
 
 **Files:**
 - Create: `backend/internal/adapter/httpapi/middleware/ratelimit.go`
@@ -3852,136 +4335,138 @@ git commit -m "feat(httpapi): add RequireAuth and RequireAdmin middleware"
 - Produces:
   - `func RateLimit(max int, window time.Duration) fiber.Handler` — in-memory, mutex-guarded fixed-window counter keyed by `c.IP() + ":" + c.Path()`. Returns `Fail(c, 429, ...)` when the count for the current window exceeds `max`; otherwise `c.Next()`. The `window` is injectable so tests can pass a short value; expired windows are pruned/reset.
 
+> **Scope note (per-account limiting deferred):** Plan-1 rate-limiting is strictly per-IP+path (the `c.IP()+":"+c.Path()` key). The spec also calls for a per-account / login-lockout dimension (§11: "per-IP + per-account; login backoff/lockout"). That per-account/login-lockout dimension is intentionally OUT of scope for this plan and is deferred to a named follow-up hardening task ("auth abuse-hardening: per-account login backoff + lockout"). This task implements only the per-IP+path limiter. Behind Caddy, `c.IP()` is the real client IP only because `BuildApp` trusts `X-Forwarded-For` from the loopback proxy (see Task 22).
+
 - [ ] **Step 1: Write the failing test (under limit passes, over limit 429, resets after window).** Create `backend/internal/adapter/httpapi/middleware/ratelimit_test.go`. Set distinct paths per subtest so window keys don't collide.
-```go
-package middleware_test
+  ```go
+  package middleware_test
 
-import (
-	"net/http/httptest"
-	"testing"
-	"time"
+  import (
+  	"net/http/httptest"
+  	"testing"
+  	"time"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/stretchr/testify/require"
+  	"github.com/gofiber/fiber/v2"
+  	"github.com/stretchr/testify/require"
 
-	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi/middleware"
-)
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi/middleware"
+  )
 
-func newRateLimitApp(path string, max int, window time.Duration) *fiber.App {
-	app := fiber.New()
-	app.Get(path, middleware.RateLimit(max, window), func(c *fiber.Ctx) error {
-		return c.SendString("ok")
-	})
-	return app
-}
+  func newRateLimitApp(path string, max int, window time.Duration) *fiber.App {
+  	app := fiber.New()
+  	app.Get(path, middleware.RateLimit(max, window), func(c *fiber.Ctx) error {
+  		return c.SendString("ok")
+  	})
+  	return app
+  }
 
-func doGet(t *testing.T, app *fiber.App, path string) int {
-	t.Helper()
-	req := httptest.NewRequest("GET", path, nil)
-	// Fixed remote addr so c.IP() is stable across calls.
-	req.RemoteAddr = "10.0.0.9:1234"
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	return resp.StatusCode
-}
+  func doGet(t *testing.T, app *fiber.App, path string) int {
+  	t.Helper()
+  	req := httptest.NewRequest("GET", path, nil)
+  	// Fixed remote addr so c.IP() is stable across calls.
+  	req.RemoteAddr = "10.0.0.9:1234"
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	return resp.StatusCode
+  }
 
-func TestRateLimit_UnderLimitPasses(t *testing.T) {
-	app := newRateLimitApp("/rl-under", 3, time.Minute)
-	require.Equal(t, 200, doGet(t, app, "/rl-under"))
-	require.Equal(t, 200, doGet(t, app, "/rl-under"))
-	require.Equal(t, 200, doGet(t, app, "/rl-under"))
-}
+  func TestRateLimit_UnderLimitPasses(t *testing.T) {
+  	app := newRateLimitApp("/rl-under", 3, time.Minute)
+  	require.Equal(t, 200, doGet(t, app, "/rl-under"))
+  	require.Equal(t, 200, doGet(t, app, "/rl-under"))
+  	require.Equal(t, 200, doGet(t, app, "/rl-under"))
+  }
 
-func TestRateLimit_OverLimitReturns429(t *testing.T) {
-	app := newRateLimitApp("/rl-over", 2, time.Minute)
-	require.Equal(t, 200, doGet(t, app, "/rl-over"))
-	require.Equal(t, 200, doGet(t, app, "/rl-over"))
-	require.Equal(t, 429, doGet(t, app, "/rl-over"))
-}
+  func TestRateLimit_OverLimitReturns429(t *testing.T) {
+  	app := newRateLimitApp("/rl-over", 2, time.Minute)
+  	require.Equal(t, 200, doGet(t, app, "/rl-over"))
+  	require.Equal(t, 200, doGet(t, app, "/rl-over"))
+  	require.Equal(t, 429, doGet(t, app, "/rl-over"))
+  }
 
-func TestRateLimit_ResetsAfterWindow(t *testing.T) {
-	app := newRateLimitApp("/rl-reset", 1, 50*time.Millisecond)
-	require.Equal(t, 200, doGet(t, app, "/rl-reset"))
-	require.Equal(t, 429, doGet(t, app, "/rl-reset"))
-	time.Sleep(80 * time.Millisecond)
-	require.Equal(t, 200, doGet(t, app, "/rl-reset"))
-}
-```
+  func TestRateLimit_ResetsAfterWindow(t *testing.T) {
+  	app := newRateLimitApp("/rl-reset", 1, 50*time.Millisecond)
+  	require.Equal(t, 200, doGet(t, app, "/rl-reset"))
+  	require.Equal(t, 429, doGet(t, app, "/rl-reset"))
+  	time.Sleep(80 * time.Millisecond)
+  	require.Equal(t, 200, doGet(t, app, "/rl-reset"))
+  }
+  ```
 
 - [ ] **Step 2: Run the test, expect FAIL (compile error: `undefined: middleware.RateLimit`).** Run from `backend/`:
-```bash
-go test ./internal/adapter/httpapi/middleware/ -run TestRateLimit
-```
-Expected: build failure — `undefined: middleware.RateLimit`; the three subtests cannot compile.
+  ```bash
+  go test ./internal/adapter/httpapi/middleware/ -run TestRateLimit
+  ```
+  Expected: build failure — `undefined: middleware.RateLimit`; the three subtests cannot compile.
 
 - [ ] **Step 3: Implement `ratelimit.go` (minimal, real).** Create `backend/internal/adapter/httpapi/middleware/ratelimit.go`. Fixed-window counter; a background-free lazy reset where each request checks whether its window has rolled over, plus opportunistic pruning of stale keys.
-```go
-package middleware
+  ```go
+  package middleware
 
-import (
-	"sync"
-	"time"
+  import (
+  	"sync"
+  	"time"
 
-	"github.com/gofiber/fiber/v2"
+  	"github.com/gofiber/fiber/v2"
 
-	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
-)
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
+  )
 
-type rlEntry struct {
-	count       int
-	windowStart time.Time
-}
+  type rlEntry struct {
+  	count       int
+  	windowStart time.Time
+  }
 
-// RateLimit is an in-memory, mutex-guarded fixed-window limiter keyed by IP+Path.
-// The window is injectable so tests can use a short duration.
-func RateLimit(max int, window time.Duration) fiber.Handler {
-	var mu sync.Mutex
-	entries := make(map[string]*rlEntry)
+  // RateLimit is an in-memory, mutex-guarded fixed-window limiter keyed by IP+Path.
+  // The window is injectable so tests can use a short duration.
+  func RateLimit(max int, window time.Duration) fiber.Handler {
+  	var mu sync.Mutex
+  	entries := make(map[string]*rlEntry)
 
-	return func(c *fiber.Ctx) error {
-		key := c.IP() + ":" + c.Path()
-		now := time.Now()
+  	return func(c *fiber.Ctx) error {
+  		key := c.IP() + ":" + c.Path()
+  		now := time.Now()
 
-		mu.Lock()
-		// Opportunistically prune stale windows to bound memory growth.
-		for k, e := range entries {
-			if now.Sub(e.windowStart) >= window {
-				delete(entries, k)
-			}
-		}
-		e, ok := entries[key]
-		if !ok || now.Sub(e.windowStart) >= window {
-			e = &rlEntry{count: 0, windowStart: now}
-			entries[key] = e
-		}
-		e.count++
-		over := e.count > max
-		mu.Unlock()
+  		mu.Lock()
+  		// Opportunistically prune stale windows to bound memory growth.
+  		for k, e := range entries {
+  			if now.Sub(e.windowStart) >= window {
+  				delete(entries, k)
+  			}
+  		}
+  		e, ok := entries[key]
+  		if !ok || now.Sub(e.windowStart) >= window {
+  			e = &rlEntry{count: 0, windowStart: now}
+  			entries[key] = e
+  		}
+  		e.count++
+  		over := e.count > max
+  		mu.Unlock()
 
-		if over {
-			return httpapi.Fail(c, fiber.StatusTooManyRequests, "too many requests")
-		}
-		return c.Next()
-	}
-}
-```
+  		if over {
+  			return httpapi.Fail(c, fiber.StatusTooManyRequests, "too many requests")
+  		}
+  		return c.Next()
+  	}
+  }
+  ```
 
 - [ ] **Step 4: Run the tests, expect PASS.** Run from `backend/`:
-```bash
-go vet ./internal/adapter/httpapi/middleware/
-go test ./internal/adapter/httpapi/middleware/ -run TestRateLimit -v
-```
-Expected: all three subtests PASS (`_UnderLimitPasses`, `_OverLimitReturns429`, `_ResetsAfterWindow`).
+  ```bash
+  go vet ./internal/adapter/httpapi/middleware/
+  go test ./internal/adapter/httpapi/middleware/ -run TestRateLimit -v
+  ```
+  Expected: all three subtests PASS (`_UnderLimitPasses`, `_OverLimitReturns429`, `_ResetsAfterWindow`).
 
 - [ ] **Step 5: Commit.**
-```bash
-git add backend/internal/adapter/httpapi/middleware/ratelimit.go backend/internal/adapter/httpapi/middleware/ratelimit_test.go
-git commit -m "feat(httpapi): add in-memory fixed-window RateLimit middleware"
-```
+  ```bash
+  git add backend/internal/adapter/httpapi/middleware/ratelimit.go backend/internal/adapter/httpapi/middleware/ratelimit_test.go
+  git commit -m "feat(httpapi): add in-memory fixed-window RateLimit middleware"
+  ```
 
 ---
 
-### Task 19: Response envelope, health handler & full router wiring
+### Task 21: Response envelope, health handler & full router wiring
 
 **Files:**
 - Create: `backend/internal/adapter/httpapi/response.go`
@@ -3989,616 +4474,721 @@ git commit -m "feat(httpapi): add in-memory fixed-window RateLimit middleware"
 - Create: `backend/internal/adapter/httpapi/router.go`
 - Test: `backend/internal/adapter/httpapi/router_test.go`
 
-> Note: `auth_handler.go` (Cluster D) defines `func NewAuthHandler(svc *auth.Service) *AuthHandler` and its methods (`Register`, `VerifyEmail`, `ResendVerification`, `Login`, `Refresh`, `Logout`, `Me`) plus request/response DTOs and the error→HTTP mapping. This task **consumes** those; do not redefine them. If a handler method name differs, adjust the `Mount` body to match the Cluster D names — do not change the route paths or middleware wiring below.
+> Note: `auth_handler.go` (Tasks 12–18) defines `func NewAuthHandler(svc *auth.Service) *AuthHandler` and its methods (`Register`, `VerifyEmail`, `ResendVerification`, `Login`, `Refresh`, `Logout`, `Me`) plus request/response DTOs; `errors.go` defines `mapAuthError`. This task **consumes** those; do not redefine them. `response.go` here defines `OK`/`Fail`, which the handler tasks and middleware already reference — so this task (or at least its `response.go`) should land early enough that `mapAuthError`/handlers compile.
 
 **Interfaces:**
 - Consumes:
-  - `auth.Service` and `func (s *Service) Me(ctx, userID string) (domain.User, error)` from `internal/app/auth`.
-  - `*AuthHandler` (same package) with `NewAuthHandler(svc *auth.Service) *AuthHandler` and the seven handler methods (Cluster D).
-  - `middleware.RequireAuth(secret string) fiber.Handler` and `middleware.RateLimit(max int, window time.Duration) fiber.Handler` (Tasks 17, 18).
+  - `auth.Service` and `func (s *Service) Me(ctx, userID string) (domain.User, error)` from `internal/app/auth` (Task 18).
+  - `*AuthHandler` (same package) with `NewAuthHandler(svc *auth.Service) *AuthHandler` and the seven handler methods (Tasks 12–18).
+  - `middleware.RequireAuth(secret string) fiber.Handler` and `middleware.RateLimit(max int, window time.Duration) fiber.Handler` (Tasks 19, 20).
   - `pgxpool.Pool.Ping(ctx) error` for the health DB ping.
 - Produces:
   - `func OK(c *fiber.Ctx, data any) error` — 200, body `{status:0, message:"ok", data}`.
   - `func Fail(c *fiber.Ctx, httpCode int, msg string) error` — `httpCode`, body `{status:1, message:msg, data:null}`.
   - `type Pinger interface { Ping(ctx context.Context) error }` and `func HealthHandler(p Pinger) fiber.Handler` — always 200, body data `{db:"up"|"down"}`.
-  - `type RouterDeps struct { Auth *AuthHandler; Pinger Pinger; JWTSecret string }` and `func Mount(app *fiber.App, deps RouterDeps)` — wires all `/api` routes.
+  - `type RouterDeps struct { Auth *AuthHandler; Pinger Pinger; JWTSecret string }` and `func Mount(app *fiber.App, deps RouterDeps)` — wires all `/api` routes (every `/auth/*` POST is RateLimit'd; `/auth/me` is behind `RequireAuth`; `/health` is open).
 
-- [ ] **Step 1: Write `response.go` first (no test of its own; exercised via Step 4 router test).** Create `backend/internal/adapter/httpapi/response.go`:
-```go
-package httpapi
+- [ ] **Step 1: Write `response.go` first (no test of its own; exercised via Step 4 router test and the earlier `mapAuthError` micro-test).** Create `backend/internal/adapter/httpapi/response.go`:
+  ```go
+  package httpapi
 
-import "github.com/gofiber/fiber/v2"
+  import "github.com/gofiber/fiber/v2"
 
-type envelope struct {
-	Status  int    `json:"status"`
-	Message string `json:"message"`
-	Data    any    `json:"data"`
-}
+  type envelope struct {
+  	Status  int    `json:"status"`
+  	Message string `json:"message"`
+  	Data    any    `json:"data"`
+  }
 
-// OK writes a 200 success envelope: {status:0, message:"ok", data}.
-func OK(c *fiber.Ctx, data any) error {
-	return c.Status(fiber.StatusOK).JSON(envelope{Status: 0, Message: "ok", Data: data})
-}
+  // OK writes a 200 success envelope: {status:0, message:"ok", data}.
+  func OK(c *fiber.Ctx, data any) error {
+  	return c.Status(fiber.StatusOK).JSON(envelope{Status: 0, Message: "ok", Data: data})
+  }
 
-// Fail writes an error envelope with the given HTTP status: {status:1, message, data:null}.
-func Fail(c *fiber.Ctx, httpCode int, msg string) error {
-	return c.Status(httpCode).JSON(envelope{Status: 1, Message: msg, Data: nil})
-}
-```
+  // Fail writes an error envelope with the given HTTP status: {status:1, message, data:null}.
+  func Fail(c *fiber.Ctx, httpCode int, msg string) error {
+  	return c.Status(httpCode).JSON(envelope{Status: 1, Message: msg, Data: nil})
+  }
+  ```
 
-- [ ] **Step 2: Write the failing router/health test.** Create `backend/internal/adapter/httpapi/router_test.go`. Use a fake `Pinger` (in-process, no Postgres) and a real `auth.Service` is not needed for `/health`; for `/auth/me` we mount with a tiny stub by constructing the real handler over a `Service` backed by a fake `domain.Store`. To keep this test focused and Postgres-free, drive `/auth/me` through the JWT + `RequireAuth` path and a `Service` built on a minimal in-test `domain.Store` whose `GetUserByID` returns a fixed user. This avoids testcontainers here (the full DB-backed E2E lives in Task 20).
-```go
-package httpapi_test
+- [ ] **Step 2: Write the failing router/health test.** Create `backend/internal/adapter/httpapi/router_test.go`. Use a fake `Pinger` (in-process, no Postgres). For `/auth/me`, drive the JWT + `RequireAuth` path with a `Service` built on a minimal in-test `domain.Store` whose `GetUserByID` returns a fixed user (avoids testcontainers here; the full DB-backed E2E lives in Task 22).
+  ```go
+  package httpapi_test
 
-import (
-	"context"
-	"encoding/json"
-	"io"
-	"net/http/httptest"
-	"testing"
-	"time"
+  import (
+  	"context"
+  	"encoding/json"
+  	"io"
+  	"net/http/httptest"
+  	"testing"
+  	"time"
 
-	"github.com/gofiber/fiber/v2"
-	"github.com/stretchr/testify/require"
+  	"github.com/gofiber/fiber/v2"
+  	"github.com/stretchr/testify/require"
 
-	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
-	"github.com/zulkhair/pustaka/backend/internal/app/auth"
-	"github.com/zulkhair/pustaka/backend/internal/config"
-	"github.com/zulkhair/pustaka/backend/internal/domain"
-	"github.com/zulkhair/pustaka/backend/internal/pkg/jwt"
-)
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
+  	"github.com/zulkhair/pustaka/backend/internal/app/auth"
+  	"github.com/zulkhair/pustaka/backend/internal/config"
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/pkg/jwt"
+  )
 
-const routerSecret = "router-secret-abcdefgh"
+  const routerSecret = "router-secret-abcdefgh"
 
-// fakePinger lets us flip DB up/down without Postgres.
-type fakePinger struct{ err error }
+  // fakePinger lets us flip DB up/down without Postgres.
+  type fakePinger struct{ err error }
 
-func (f fakePinger) Ping(ctx context.Context) error { return f.err }
+  func (f fakePinger) Ping(ctx context.Context) error { return f.err }
 
-// meStore is a minimal domain.Store; only GetUserByID is used by /auth/me.
-type meStore struct {
-	domain.Store // embed nil interface; unused methods will panic if called (they aren't)
-	user         domain.User
-	err          error
-}
+  // meStore is a minimal domain.Store; only GetUserByID is used by /auth/me.
+  type meStore struct {
+  	domain.Store // embed nil interface; unused methods will panic if called (they aren't)
+  	user         domain.User
+  	err          error
+  }
 
-func (m meStore) GetUserByID(ctx context.Context, id string) (domain.User, error) {
-	return m.user, m.err
-}
+  func (m meStore) GetUserByID(ctx context.Context, id string) (domain.User, error) {
+  	return m.user, m.err
+  }
 
-func buildRouterApp(t *testing.T, p httpapi.Pinger, store domain.Store) *fiber.App {
-	t.Helper()
-	cfg := config.Config{JWTSecret: routerSecret, AccessTTL: 15 * time.Minute}
-	svc := auth.New(store, nil, cfg)
-	app := fiber.New()
-	httpapi.Mount(app, httpapi.RouterDeps{
-		Auth:      httpapi.NewAuthHandler(svc),
-		Pinger:    p,
-		JWTSecret: routerSecret,
-	})
-	return app
-}
+  func buildRouterApp(t *testing.T, p httpapi.Pinger, store domain.Store) *fiber.App {
+  	t.Helper()
+  	cfg := config.Config{JWTSecret: routerSecret, AccessTTL: 15 * time.Minute}
+  	svc := auth.New(store, nil, cfg)
+  	app := fiber.New()
+  	httpapi.Mount(app, httpapi.RouterDeps{
+  		Auth:      httpapi.NewAuthHandler(svc),
+  		Pinger:    p,
+  		JWTSecret: routerSecret,
+  	})
+  	return app
+  }
 
-func TestHealth_ReportsDBUp(t *testing.T) {
-	app := buildRouterApp(t, fakePinger{err: nil}, meStore{})
-	req := httptest.NewRequest("GET", "/api/health", nil)
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode)
+  func TestHealth_ReportsDBUp(t *testing.T) {
+  	app := buildRouterApp(t, fakePinger{err: nil}, meStore{})
+  	req := httptest.NewRequest("GET", "/api/health", nil)
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 200, resp.StatusCode)
 
-	body, _ := io.ReadAll(resp.Body)
-	var env struct {
-		Status int `json:"status"`
-		Data   struct {
-			DB string `json:"db"`
-		} `json:"data"`
-	}
-	require.NoError(t, json.Unmarshal(body, &env))
-	require.Equal(t, 0, env.Status)
-	require.Equal(t, "up", env.Data.DB)
-}
+  	body, _ := io.ReadAll(resp.Body)
+  	var env struct {
+  		Status int `json:"status"`
+  		Data   struct {
+  			DB string `json:"db"`
+  		} `json:"data"`
+  	}
+  	require.NoError(t, json.Unmarshal(body, &env))
+  	require.Equal(t, 0, env.Status)
+  	require.Equal(t, "up", env.Data.DB)
+  }
 
-func TestHealth_ReportsDBDownStill200(t *testing.T) {
-	app := buildRouterApp(t, fakePinger{err: context.DeadlineExceeded}, meStore{})
-	req := httptest.NewRequest("GET", "/api/health", nil)
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode)
-	body, _ := io.ReadAll(resp.Body)
-	require.Contains(t, string(body), `"db":"down"`)
-}
+  func TestHealth_ReportsDBDownStill200(t *testing.T) {
+  	app := buildRouterApp(t, fakePinger{err: context.DeadlineExceeded}, meStore{})
+  	req := httptest.NewRequest("GET", "/api/health", nil)
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 200, resp.StatusCode)
+  	body, _ := io.ReadAll(resp.Body)
+  	require.Contains(t, string(body), `"db":"down"`)
+  }
 
-func TestAuthMe_NoToken_401(t *testing.T) {
-	app := buildRouterApp(t, fakePinger{}, meStore{})
-	req := httptest.NewRequest("GET", "/api/auth/me", nil)
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	require.Equal(t, 401, resp.StatusCode)
-}
+  func TestAuthMe_NoToken_401(t *testing.T) {
+  	app := buildRouterApp(t, fakePinger{}, meStore{})
+  	req := httptest.NewRequest("GET", "/api/auth/me", nil)
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 401, resp.StatusCode)
+  }
 
-func TestAuthMe_ValidToken_200(t *testing.T) {
-	store := meStore{user: domain.User{
-		ID: "u-9", Username: "alice", Email: "alice@example.com",
-		Role: domain.RoleUser, EmailVerified: true,
-	}}
-	app := buildRouterApp(t, fakePinger{}, store)
+  func TestAuthMe_ValidToken_200(t *testing.T) {
+  	store := meStore{user: domain.User{
+  		ID: "u-9", Username: "alice", Email: "alice@example.com",
+  		Role: domain.RoleUser, EmailVerified: true,
+  	}}
+  	app := buildRouterApp(t, fakePinger{}, store)
 
-	token, err := jwt.GenerateAccess("u-9", domain.RoleUser, routerSecret, 15*time.Minute)
-	require.NoError(t, err)
+  	token, err := jwt.GenerateAccess("u-9", domain.RoleUser, routerSecret, 15*time.Minute)
+  	require.NoError(t, err)
 
-	req := httptest.NewRequest("GET", "/api/auth/me", nil)
-	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	require.Equal(t, 200, resp.StatusCode)
+  	req := httptest.NewRequest("GET", "/api/auth/me", nil)
+  	req.Header.Set("Authorization", "Bearer "+token)
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 200, resp.StatusCode)
 
-	body, _ := io.ReadAll(resp.Body)
-	require.Contains(t, string(body), "alice")
-	require.Contains(t, string(body), "alice@example.com")
-}
-```
+  	body, _ := io.ReadAll(resp.Body)
+  	require.Contains(t, string(body), "alice")
+  	require.Contains(t, string(body), "alice@example.com")
+  }
+  ```
 
 - [ ] **Step 3: Run the test, expect FAIL (compile error: `undefined: httpapi.Pinger`, `httpapi.Mount`, `httpapi.RouterDeps`, and `HealthHandler`).** Run from `backend/`:
-```bash
-go test ./internal/adapter/httpapi/ -run 'TestHealth|TestAuthMe'
-```
-Expected: build failure — `undefined: httpapi.Mount` / `httpapi.RouterDeps` / `httpapi.Pinger`. (`response.go` already compiles.)
+  ```bash
+  go test ./internal/adapter/httpapi/ -run 'TestHealth|TestAuthMe'
+  ```
+  Expected: build failure — `undefined: httpapi.Mount` / `httpapi.RouterDeps` / `httpapi.Pinger`. (`response.go` already compiles.)
 
 - [ ] **Step 4: Implement `health_handler.go`.** Create `backend/internal/adapter/httpapi/health_handler.go`:
-```go
-package httpapi
+  ```go
+  package httpapi
 
-import (
-	"context"
-	"time"
+  import (
+  	"context"
+  	"time"
 
-	"github.com/gofiber/fiber/v2"
-)
+  	"github.com/gofiber/fiber/v2"
+  )
 
-// Pinger is the minimal surface the health check needs (satisfied by *pgxpool.Pool).
-type Pinger interface {
-	Ping(ctx context.Context) error
-}
+  // Pinger is the minimal surface the health check needs (satisfied by *pgxpool.Pool).
+  type Pinger interface {
+  	Ping(ctx context.Context) error
+  }
 
-// HealthHandler always returns 200; data.db is "up" when the DB ping succeeds, else "down".
-func HealthHandler(p Pinger) fiber.Handler {
-	return func(c *fiber.Ctx) error {
-		ctx, cancel := context.WithTimeout(c.Context(), 2*time.Second)
-		defer cancel()
-		db := "up"
-		if p == nil || p.Ping(ctx) != nil {
-			db = "down"
-		}
-		return OK(c, fiber.Map{"db": db})
-	}
-}
-```
+  // HealthHandler always returns 200; data.db is "up" when the DB ping succeeds, else "down".
+  func HealthHandler(p Pinger) fiber.Handler {
+  	return func(c *fiber.Ctx) error {
+  		ctx, cancel := context.WithTimeout(c.Context(), 2*time.Second)
+  		defer cancel()
+  		db := "up"
+  		if p == nil || p.Ping(ctx) != nil {
+  			db = "down"
+  		}
+  		return OK(c, fiber.Map{"db": db})
+  	}
+  }
+  ```
 
 - [ ] **Step 5: Implement `router.go` wiring all routes.** Create `backend/internal/adapter/httpapi/router.go`. Each `/auth/*` POST is wrapped in its own `RateLimit` (10 requests / minute per IP+path); `/auth/me` is behind `RequireAuth`; `/health` is open.
-```go
-package httpapi
+  ```go
+  package httpapi
 
-import (
-	"time"
+  import (
+  	"time"
 
-	"github.com/gofiber/fiber/v2"
+  	"github.com/gofiber/fiber/v2"
 
-	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi/middleware"
-)
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi/middleware"
+  )
 
-// RouterDeps holds the dependencies needed to wire the HTTP routes.
-type RouterDeps struct {
-	Auth      *AuthHandler
-	Pinger    Pinger
-	JWTSecret string
-}
+  // RouterDeps holds the dependencies needed to wire the HTTP routes.
+  type RouterDeps struct {
+  	Auth      *AuthHandler
+  	Pinger    Pinger
+  	JWTSecret string
+  }
 
-const (
-	authRateMax    = 10
-	authRateWindow = time.Minute
-)
+  const (
+  	authRateMax    = 10
+  	authRateWindow = time.Minute
+  )
 
-// Mount registers all /api routes on the given Fiber app.
-func Mount(app *fiber.App, deps RouterDeps) {
-	api := app.Group("/api")
+  // Mount registers all /api routes on the given Fiber app.
+  func Mount(app *fiber.App, deps RouterDeps) {
+  	api := app.Group("/api")
 
-	rl := func() fiber.Handler { return middleware.RateLimit(authRateMax, authRateWindow) }
+  	rl := func() fiber.Handler { return middleware.RateLimit(authRateMax, authRateWindow) }
 
-	authGrp := api.Group("/auth")
-	authGrp.Post("/register", rl(), deps.Auth.Register)
-	authGrp.Post("/verify-email", rl(), deps.Auth.VerifyEmail)
-	authGrp.Post("/resend-verification", rl(), deps.Auth.ResendVerification)
-	authGrp.Post("/login", rl(), deps.Auth.Login)
-	authGrp.Post("/refresh", rl(), deps.Auth.Refresh)
-	authGrp.Post("/logout", rl(), deps.Auth.Logout)
-	authGrp.Get("/me", middleware.RequireAuth(deps.JWTSecret), deps.Auth.Me)
+  	authGrp := api.Group("/auth")
+  	authGrp.Post("/register", rl(), deps.Auth.Register)
+  	authGrp.Post("/verify-email", rl(), deps.Auth.VerifyEmail)
+  	authGrp.Post("/resend-verification", rl(), deps.Auth.ResendVerification)
+  	authGrp.Post("/login", rl(), deps.Auth.Login)
+  	authGrp.Post("/refresh", rl(), deps.Auth.Refresh)
+  	authGrp.Post("/logout", rl(), deps.Auth.Logout)
+  	authGrp.Get("/me", middleware.RequireAuth(deps.JWTSecret), deps.Auth.Me)
 
-	api.Get("/health", HealthHandler(deps.Pinger))
-}
-```
+  	api.Get("/health", HealthHandler(deps.Pinger))
+  }
+  ```
 
 - [ ] **Step 6: Run the tests, expect PASS.** Run from `backend/`:
-```bash
-go vet ./internal/adapter/httpapi/...
-go test ./internal/adapter/httpapi/ -run 'TestHealth|TestAuthMe' -v
-```
-Expected: all four subtests PASS (`TestHealth_ReportsDBUp`, `TestHealth_ReportsDBDownStill200`, `TestAuthMe_NoToken_401`, `TestAuthMe_ValidToken_200`).
+  ```bash
+  go vet ./internal/adapter/httpapi/...
+  go test ./internal/adapter/httpapi/ -run 'TestHealth|TestAuthMe' -v
+  ```
+  Expected: all four subtests PASS (`TestHealth_ReportsDBUp`, `TestHealth_ReportsDBDownStill200`, `TestAuthMe_NoToken_401`, `TestAuthMe_ValidToken_200`).
 
 - [ ] **Step 7: Commit.**
-```bash
-git add backend/internal/adapter/httpapi/response.go backend/internal/adapter/httpapi/health_handler.go backend/internal/adapter/httpapi/router.go backend/internal/adapter/httpapi/router_test.go
-git commit -m "feat(httpapi): add response envelope, health handler and route wiring"
-```
+  ```bash
+  git add backend/internal/adapter/httpapi/response.go backend/internal/adapter/httpapi/health_handler.go backend/internal/adapter/httpapi/router.go backend/internal/adapter/httpapi/router_test.go
+  git commit -m "feat(httpapi): add response envelope, health handler and route wiring"
+  ```
 
 ---
 
-### Task 20: Composition root, seed, and full auth E2E
+### Task 22: Composition root, seed command, and full auth E2E
 
 **Files:**
-- Create: `backend/cmd/server/main.go`
 - Create: `backend/internal/adapter/httpapi/app.go` (test-friendly Fiber app builder, reused by `main.go`)
-- Create: `backend/db/seed.sql`
-- Modify: `backend/Makefile` (add `seed` target)
-- Modify: `backend/README.md` (document run + seed steps) — only if a `README.md` already exists from an earlier task; otherwise create it for the documented run steps.
+- Create: `backend/cmd/server/main.go` (replaces the Task 1 placeholder)
+- Create: `backend/cmd/seed/main.go` (idempotent admin upsert)
+- Modify: `backend/Makefile` (add `seed` target → `go run ./cmd/seed`)
+- Modify: `backend/.env.example` (confirm `ADMIN_*` keys present — added in Task 1)
 - Test: `backend/internal/adapter/httpapi/e2e_test.go`
 
 **Interfaces:**
 - Consumes:
-  - `config.Load() (config.Config, error)` from `internal/config`.
-  - `store.New(pool *pgxpool.Pool) *store.Store` (or the Cluster B constructor name) returning a `domain.Store`, plus the migration runner from Cluster B (e.g. `store.RunMigrations(databaseURL string) error`). Use the actual Cluster B names; do not invent new ones.
-  - `mail.NewResend(apiKey, from string) domain.Mailer` and `mail.NewMockMailer() *mail.MockMailer` with `LastCode(email string) (string, bool)` (or the Cluster C accessor) from `internal/adapter/mail`.
+  - `config.Load() (config.Config, error)` (Task 2).
+  - `store.OpenPool(ctx, databaseURL) (*pgxpool.Pool, error)`, `store.RunMigrations(databaseURL string) error`, `store.New(pool *pgxpool.Pool) *store.Store` (Tasks 3, 6).
+  - `mail.NewResendMailer(cfg config.Config) *mail.ResendMailer` and `mail.NewMockMailer() *mail.MockMailer` with `(m *mail.MockMailer) CodeFor(email string) (string, bool)` (Task 10).
   - `auth.New(store domain.Store, mailer domain.Mailer, cfg config.Config) *auth.Service`.
-  - `httpapi.NewAuthHandler`, `httpapi.Mount`, `httpapi.RouterDeps`, `httpapi.Pinger` (Task 19).
-  - `hash.HashPassword(pw string, cost int) (string, error)` (seed SQL doc references a precomputed hash).
+  - `httpapi.NewAuthHandler`, `httpapi.Mount`, `httpapi.RouterDeps`, `httpapi.Pinger` (Task 21).
+  - `hash.HashPassword(pw string, cost int) (string, error)` (Task 7) — used by the seed command.
+  - the shared E2E `startPostgres`/helpers are local to the E2E test file (testcontainers `postgres.Run`).
 - Produces:
-  - `func BuildApp(deps httpapi.RouterDeps) *fiber.App` (in `httpapi/app.go`) — constructs a Fiber app with `recover` + `logger` middleware and calls `Mount`. Reused by both `main.go` and the E2E test.
+  - `func BuildApp(deps httpapi.RouterDeps) *fiber.App` (in `httpapi/app.go`) — constructs a Fiber app with the Caddy-aware proxy config + `recover` + `logger` middleware and calls `Mount`. Reused by `main.go`, the harness (Task 11), and the E2E test.
+  - `cmd/seed` — idempotent admin upsert (`make seed`).
 
-- [ ] **Step 1: Write `app.go` — the shared Fiber app builder.** Create `backend/internal/adapter/httpapi/app.go`:
-```go
-package httpapi
+- [ ] **Step 1: Write `app.go` — the shared Fiber app builder.** Create `backend/internal/adapter/httpapi/app.go`. The Fiber config trusts `X-Forwarded-For` ONLY from loopback (Caddy on the same host), so `RateLimit`'s `c.IP()` is the real client IP behind the reverse proxy:
+  ```go
+  package httpapi
 
-import (
-	"github.com/gofiber/fiber/v2"
-	"github.com/gofiber/fiber/v2/middleware/logger"
-	"github.com/gofiber/fiber/v2/middleware/recover"
-)
+  import (
+  	"github.com/gofiber/fiber/v2"
+  	"github.com/gofiber/fiber/v2/middleware/logger"
+  	"github.com/gofiber/fiber/v2/middleware/recover"
+  )
 
-// BuildApp constructs the Fiber app with recover + logger middleware and all routes mounted.
-// Used by both the composition root and the end-to-end tests.
-func BuildApp(deps RouterDeps) *fiber.App {
-	app := fiber.New(fiber.Config{
-		AppName:               "pustaka",
-		DisableStartupMessage: true,
-	})
-	app.Use(recover.New())
-	app.Use(logger.New())
-	Mount(app, deps)
-	return app
-}
-```
+  // BuildApp constructs the Fiber app with the Caddy-aware proxy config, recover +
+  // logger middleware, and all routes mounted. Used by the composition root, the
+  // shared test harness, and the end-to-end tests.
+  //
+  // ProxyHeader + EnableTrustedProxyCheck + TrustedProxies make c.IP() resolve to
+  // the real client via X-Forwarded-For when the request comes from the loopback
+  // reverse proxy (Caddy). The Caddyfile fronting this service MUST forward
+  // X-Forwarded-For for per-IP rate-limiting to see real client addresses.
+  func BuildApp(deps RouterDeps) *fiber.App {
+  	app := fiber.New(fiber.Config{
+  		AppName:                 "pustaka",
+  		DisableStartupMessage:   true,
+  		ProxyHeader:             fiber.HeaderXForwardedFor,
+  		EnableTrustedProxyCheck: true,
+  		TrustedProxies:          []string{"127.0.0.1", "::1"},
+  	})
+  	app.Use(recover.New())
+  	app.Use(logger.New())
+  	Mount(app, deps)
+  	return app
+  }
+  ```
 
-- [ ] **Step 2: Write the failing E2E test (testcontainers Postgres + MockMailer).** Create `backend/internal/adapter/httpapi/e2e_test.go`. The full happy path: register → read code from MockMailer → verify-email → login → GET /auth/me → refresh → logout → refresh-again fails. Replace `store.New` / `store.RunMigrations` / `mail.NewMockMailer` / `LastCode` with the exact Cluster B/C names if they differ.
-```go
-package httpapi_test
+- [ ] **Step 2: Write the failing E2E test (testcontainers Postgres + MockMailer).** Create `backend/internal/adapter/httpapi/e2e_test.go`. The full happy path: register → read code from MockMailer via `CodeFor(email)` → verify-email → login → GET /auth/me → refresh → logout → refresh-again fails. It uses `store.RunMigrations(dsn)` and `store.New(pool)`:
+  ```go
+  package httpapi_test
 
-import (
-	"bytes"
-	"context"
-	"encoding/json"
-	"io"
-	"net/http"
-	"net/http/httptest"
-	"testing"
-	"time"
+  import (
+  	"bytes"
+  	"context"
+  	"encoding/json"
+  	"io"
+  	"net/http"
+  	"net/http/httptest"
+  	"testing"
+  	"time"
 
-	"github.com/jackc/pgx/v5/pgxpool"
-	"github.com/stretchr/testify/require"
-	"github.com/testcontainers/testcontainers-go"
-	"github.com/testcontainers/testcontainers-go/modules/postgres"
-	"github.com/testcontainers/testcontainers-go/wait"
+  	"github.com/jackc/pgx/v5/pgxpool"
+  	"github.com/stretchr/testify/require"
+  	"github.com/testcontainers/testcontainers-go"
+  	"github.com/testcontainers/testcontainers-go/modules/postgres"
+  	"github.com/testcontainers/testcontainers-go/wait"
 
-	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
-	"github.com/zulkhair/pustaka/backend/internal/adapter/mail"
-	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
-	"github.com/zulkhair/pustaka/backend/internal/app/auth"
-	"github.com/zulkhair/pustaka/backend/internal/config"
-)
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/mail"
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
+  	"github.com/zulkhair/pustaka/backend/internal/app/auth"
+  	"github.com/zulkhair/pustaka/backend/internal/config"
+  )
 
-// startPostgres spins up an ephemeral Postgres, runs migrations, returns pool + DSN + cleanup.
-func startPostgres(t *testing.T) (*pgxpool.Pool, string) {
-	t.Helper()
-	ctx := context.Background()
-	ctr, err := postgres.Run(ctx,
-		"postgres:16-alpine",
-		postgres.WithDatabase("pustaka"),
-		postgres.WithUsername("pustaka"),
-		postgres.WithPassword("pustaka"),
-		testcontainers.WithWaitStrategy(
-			wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second)),
-	)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = ctr.Terminate(ctx) })
+  // startE2EPostgres spins up an ephemeral Postgres, runs migrations, returns pool + DSN.
+  func startE2EPostgres(t *testing.T) (*pgxpool.Pool, string) {
+  	t.Helper()
+  	ctx := context.Background()
+  	ctr, err := postgres.Run(ctx,
+  		"postgres:16-alpine",
+  		postgres.WithDatabase("pustaka"),
+  		postgres.WithUsername("pustaka"),
+  		postgres.WithPassword("pustaka"),
+  		testcontainers.WithWaitStrategy(
+  			wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second)),
+  	)
+  	require.NoError(t, err)
+  	t.Cleanup(func() { _ = ctr.Terminate(ctx) })
 
-	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
-	require.NoError(t, err)
+  	dsn, err := ctr.ConnectionString(ctx, "sslmode=disable")
+  	require.NoError(t, err)
 
-	require.NoError(t, store.RunMigrations(dsn))
+  	require.NoError(t, store.RunMigrations(dsn))
 
-	pool, err := pgxpool.New(ctx, dsn)
-	require.NoError(t, err)
-	t.Cleanup(pool.Close)
-	return pool, dsn
-}
+  	pool, err := pgxpool.New(ctx, dsn)
+  	require.NoError(t, err)
+  	t.Cleanup(pool.Close)
+  	return pool, dsn
+  }
 
-// post is a JSON POST helper returning the decoded envelope.
-type envResp struct {
-	Status  int             `json:"status"`
-	Message string          `json:"message"`
-	Data    json.RawMessage `json:"data"`
-}
+  type envResp struct {
+  	Status  int             `json:"status"`
+  	Message string          `json:"message"`
+  	Data    json.RawMessage `json:"data"`
+  }
 
-func post(t *testing.T, app interface {
-	Test(*http.Request, ...int) (*http.Response, error)
-}, path string, body any, bearer string) (int, envResp) {
-	t.Helper()
-	raw, err := json.Marshal(body)
-	require.NoError(t, err)
-	req := httptest.NewRequest("POST", path, bytes.NewReader(raw))
-	req.Header.Set("Content-Type", "application/json")
-	if bearer != "" {
-		req.Header.Set("Authorization", "Bearer "+bearer)
-	}
-	resp, err := app.Test(req, -1)
-	require.NoError(t, err)
-	b, _ := io.ReadAll(resp.Body)
-	var e envResp
-	require.NoError(t, json.Unmarshal(b, &e), "body: %s", string(b))
-	return resp.StatusCode, e
-}
+  func e2ePost(t *testing.T, app interface {
+  	Test(*http.Request, ...int) (*http.Response, error)
+  }, path string, body any, bearer string) (int, envResp) {
+  	t.Helper()
+  	raw, err := json.Marshal(body)
+  	require.NoError(t, err)
+  	req := httptest.NewRequest("POST", path, bytes.NewReader(raw))
+  	req.Header.Set("Content-Type", "application/json")
+  	if bearer != "" {
+  		req.Header.Set("Authorization", "Bearer "+bearer)
+  	}
+  	resp, err := app.Test(req, -1)
+  	require.NoError(t, err)
+  	b, _ := io.ReadAll(resp.Body)
+  	var e envResp
+  	require.NoError(t, json.Unmarshal(b, &e), "body: %s", string(b))
+  	return resp.StatusCode, e
+  }
 
-func TestAuthFlow_E2E(t *testing.T) {
-	if testing.Short() {
-		t.Skip("skipping e2e in short mode")
-	}
-	pool, _ := startPostgres(t)
-	st := store.New(pool)
-	mockMail := mail.NewMockMailer()
-	cfg := config.Config{
-		JWTSecret:   "e2e-secret-0123456789",
-		AccessTTL:   15 * time.Minute,
-		RefreshTTL:  720 * time.Hour,
-		BcryptCost:  10, // lower cost keeps the test fast
-		CodeTTL:     15 * time.Minute,
-		MaxAttempts: 5,
-	}
-	svc := auth.New(st, mockMail, cfg)
-	app := httpapi.BuildApp(httpapi.RouterDeps{
-		Auth:      httpapi.NewAuthHandler(svc),
-		Pinger:    pool,
-		JWTSecret: cfg.JWTSecret,
-	})
+  func TestAuthFlow_E2E(t *testing.T) {
+  	if testing.Short() {
+  		t.Skip("skipping e2e in short mode")
+  	}
+  	pool, _ := startE2EPostgres(t)
+  	st := store.New(pool)
+  	mockMail := mail.NewMockMailer()
+  	cfg := config.Config{
+  		JWTSecret:   "e2e-secret-0123456789",
+  		AccessTTL:   15 * time.Minute,
+  		RefreshTTL:  720 * time.Hour,
+  		BcryptCost:  10, // lower cost keeps the test fast
+  		CodeTTL:     15 * time.Minute,
+  		MaxAttempts: 5,
+  	}
+  	svc := auth.New(st, mockMail, cfg)
+  	app := httpapi.BuildApp(httpapi.RouterDeps{
+  		Auth:      httpapi.NewAuthHandler(svc),
+  		Pinger:    pool,
+  		JWTSecret: cfg.JWTSecret,
+  	})
 
-	const email = "e2e@example.com"
+  	const email = "e2e@example.com"
 
-	// 1. register (generic success, no tokens yet)
-	code, _ := post(t, app, "/api/auth/register",
-		map[string]string{"username": "e2euser", "email": email, "password": "hunter2pass"}, "")
-	require.Equal(t, 200, code)
+  	// 1. register (generic success, no tokens yet)
+  	code, _ := e2ePost(t, app, "/api/auth/register",
+  		map[string]string{"username": "e2euser", "email": email, "password": "hunter2pass"}, "")
+  	require.Equal(t, 200, code)
 
-	// 2. read the verification code from the mock mailer
-	vcode, ok := mockMail.LastCode(email)
-	require.True(t, ok, "mock mailer should have captured a code")
-	require.Len(t, vcode, 6)
+  	// 2. read the verification code from the mock mailer
+  	vcode, ok := mockMail.CodeFor(email)
+  	require.True(t, ok, "mock mailer should have captured a code")
+  	require.Len(t, vcode, 6)
 
-	// 3. verify-email -> tokens
-	code, env := post(t, app, "/api/auth/verify-email",
-		map[string]string{"email": email, "code": vcode}, "")
-	require.Equal(t, 200, code)
-	var verifyTokens struct {
-		AccessToken  string `json:"accessToken"`
-		RefreshToken string `json:"refreshToken"`
-		ExpiresIn    int    `json:"expiresIn"`
-	}
-	require.NoError(t, json.Unmarshal(env.Data, &verifyTokens))
-	require.NotEmpty(t, verifyTokens.AccessToken)
-	require.NotEmpty(t, verifyTokens.RefreshToken)
+  	// 3. verify-email -> tokens
+  	code, env := e2ePost(t, app, "/api/auth/verify-email",
+  		map[string]string{"email": email, "code": vcode}, "")
+  	require.Equal(t, 200, code)
+  	var verifyTokens struct {
+  		AccessToken  string `json:"accessToken"`
+  		RefreshToken string `json:"refreshToken"`
+  		ExpiresIn    int    `json:"expiresIn"`
+  	}
+  	require.NoError(t, json.Unmarshal(env.Data, &verifyTokens))
+  	require.NotEmpty(t, verifyTokens.AccessToken)
+  	require.NotEmpty(t, verifyTokens.RefreshToken)
 
-	// 4. login -> tokens
-	code, env = post(t, app, "/api/auth/login",
-		map[string]string{"identifier": email, "password": "hunter2pass"}, "")
-	require.Equal(t, 200, code)
-	var loginTokens struct {
-		AccessToken  string `json:"accessToken"`
-		RefreshToken string `json:"refreshToken"`
-	}
-	require.NoError(t, json.Unmarshal(env.Data, &loginTokens))
-	require.NotEmpty(t, loginTokens.AccessToken)
-	require.NotEmpty(t, loginTokens.RefreshToken)
+  	// 4. login -> tokens
+  	code, env = e2ePost(t, app, "/api/auth/login",
+  		map[string]string{"identifier": email, "password": "hunter2pass"}, "")
+  	require.Equal(t, 200, code)
+  	var loginTokens struct {
+  		AccessToken  string `json:"accessToken"`
+  		RefreshToken string `json:"refreshToken"`
+  	}
+  	require.NoError(t, json.Unmarshal(env.Data, &loginTokens))
+  	require.NotEmpty(t, loginTokens.AccessToken)
+  	require.NotEmpty(t, loginTokens.RefreshToken)
 
-	// 5. GET /auth/me with the access token
-	meReq := httptest.NewRequest("GET", "/api/auth/me", nil)
-	meReq.Header.Set("Authorization", "Bearer "+loginTokens.AccessToken)
-	meResp, err := app.Test(meReq, -1)
-	require.NoError(t, err)
-	require.Equal(t, 200, meResp.StatusCode)
-	meBody, _ := io.ReadAll(meResp.Body)
-	require.Contains(t, string(meBody), "e2euser")
-	require.Contains(t, string(meBody), email)
+  	// 5. GET /auth/me with the access token
+  	meReq := httptest.NewRequest("GET", "/api/auth/me", nil)
+  	meReq.Header.Set("Authorization", "Bearer "+loginTokens.AccessToken)
+  	meResp, err := app.Test(meReq, -1)
+  	require.NoError(t, err)
+  	require.Equal(t, 200, meResp.StatusCode)
+  	meBody, _ := io.ReadAll(meResp.Body)
+  	require.Contains(t, string(meBody), "e2euser")
+  	require.Contains(t, string(meBody), email)
 
-	// 6. refresh -> new tokens, old refresh token is rotated out
-	code, env = post(t, app, "/api/auth/refresh",
-		map[string]string{"refreshToken": loginTokens.RefreshToken}, "")
-	require.Equal(t, 200, code)
-	var refreshed struct {
-		RefreshToken string `json:"refreshToken"`
-	}
-	require.NoError(t, json.Unmarshal(env.Data, &refreshed))
-	require.NotEmpty(t, refreshed.RefreshToken)
-	require.NotEqual(t, loginTokens.RefreshToken, refreshed.RefreshToken)
+  	// 6. refresh -> new tokens, old refresh token is rotated out
+  	code, env = e2ePost(t, app, "/api/auth/refresh",
+  		map[string]string{"refreshToken": loginTokens.RefreshToken}, "")
+  	require.Equal(t, 200, code)
+  	var refreshed struct {
+  		RefreshToken string `json:"refreshToken"`
+  	}
+  	require.NoError(t, json.Unmarshal(env.Data, &refreshed))
+  	require.NotEmpty(t, refreshed.RefreshToken)
+  	require.NotEqual(t, loginTokens.RefreshToken, refreshed.RefreshToken)
 
-	// 7. logout the rotated refresh token
-	code, _ = post(t, app, "/api/auth/logout",
-		map[string]string{"refreshToken": refreshed.RefreshToken}, "")
-	require.Equal(t, 200, code)
+  	// 7. logout the rotated refresh token
+  	code, _ = e2ePost(t, app, "/api/auth/logout",
+  		map[string]string{"refreshToken": refreshed.RefreshToken}, "")
+  	require.Equal(t, 200, code)
 
-	// 8. refresh again with the logged-out token must fail (401)
-	code, _ = post(t, app, "/api/auth/refresh",
-		map[string]string{"refreshToken": refreshed.RefreshToken}, "")
-	require.Equal(t, 401, code)
-}
-```
+  	// 8. refresh again with the logged-out token must fail (401)
+  	code, _ = e2ePost(t, app, "/api/auth/refresh",
+  		map[string]string{"refreshToken": refreshed.RefreshToken}, "")
+  	require.Equal(t, 401, code)
+  }
 
-- [ ] **Step 3: Run the E2E test, expect FAIL (compile error: `undefined: httpapi.BuildApp`).** Run from `backend/`:
-```bash
-go test ./internal/adapter/httpapi/ -run TestAuthFlow_E2E
-```
-Expected: build failure — `undefined: httpapi.BuildApp` (until Step 1 is committed it may already exist; if `app.go` from Step 1 compiles, the failure is instead the missing wiring/methods until Cluster B/C/D are in place). State the observed failure (compile or assertion) explicitly before proceeding.
+  func TestSeededAdminCanLogin_E2E(t *testing.T) {
+  	if testing.Short() {
+  		t.Skip("skipping e2e in short mode")
+  	}
+  	pool, _ := startE2EPostgres(t)
+  	st := store.New(pool)
+  	cfg := config.Config{
+  		JWTSecret:  "e2e-secret-0123456789",
+  		AccessTTL:  15 * time.Minute,
+  		RefreshTTL: 720 * time.Hour,
+  		BcryptCost: 10,
+  	}
+  	svc := auth.New(st, mail.NewMockMailer(), cfg)
+  	app := httpapi.BuildApp(httpapi.RouterDeps{
+  		Auth:      httpapi.NewAuthHandler(svc),
+  		Pinger:    pool,
+  		JWTSecret: cfg.JWTSecret,
+  	})
 
-- [ ] **Step 4: Write `db/seed.sql` — seeded admin (pre-verified).** Create `backend/db/seed.sql`. The bcrypt hash below is for the plaintext `admin123` at cost 12; regenerate with `go run ./cmd/genhash` or any bcrypt tool if you change the password. `gen_random_uuid()` requires `pgcrypto` (enabled by the init migration) — if not enabled, replace with a literal UUID.
-```sql
--- Seeded admin account for Pustaka.
--- Username: admin   Password: admin123 (CHANGE IN PROD)
--- password_hash is bcrypt(cost=12) of "admin123".
-INSERT INTO web_user (id, username, email, password_hash, role, email_verified, created_at)
-VALUES (
-    '00000000-0000-4000-8000-000000000001',
-    'admin',
-    'admin@pustaka.local',
-    '$2a$12$Q8mJ3cN0sQ9o4r8wYy0Y1u8kQ2y6z9o5b1c2d3e4f5g6h7i8j9k0L',
-    'admin',
-    true,
-    now()
-)
-ON CONFLICT (username) DO NOTHING;
-```
+  	// Seed an admin (pre-verified) directly via the store, mirroring cmd/seed.
+  	require.NoError(t, seedAdminForTest(t, st, "admin", "admin@pustaka.local", "admin123", cfg.BcryptCost))
 
-- [ ] **Step 5: Implement `cmd/server/main.go` — composition root.** Create `backend/cmd/server/main.go`. Loads config, opens the pool, runs migrations unless `APP_ENV=prod`, builds Store/Mailer/Service, builds the app via `BuildApp`, and serves with graceful shutdown via `slog`.
-```go
-package main
+  	code, _ := e2ePost(t, app, "/api/auth/login",
+  		map[string]string{"identifier": "admin", "password": "admin123"}, "")
+  	require.Equal(t, 200, code, "seeded admin must be able to log in")
+  }
+  ```
+  > `seedAdminForTest` mirrors the `cmd/seed` upsert logic (hash password via `hash.HashPassword`, role=admin, email_verified=true). Add it once in a small `e2e_seed_test.go` (or inline in this file) using `st.CreateUser` + `st.SetUserEmailVerified`; it must hash with `cfg.BcryptCost` and verify the user so login succeeds.
 
-import (
-	"context"
-	"errors"
-	"log/slog"
-	"os"
-	"os/signal"
-	"syscall"
-	"time"
+- [ ] **Step 3: Run the E2E test, expect FAIL (compile error: `undefined: httpapi.BuildApp` until Step 1 lands; then missing `seedAdminForTest`/wiring).** Run from `backend/`:
+  ```bash
+  go test ./internal/adapter/httpapi/ -run 'TestAuthFlow_E2E|TestSeededAdminCanLogin_E2E'
+  ```
+  Expected: build failure (`undefined: httpapi.BuildApp` / `undefined: seedAdminForTest`). State the observed failure (compile or assertion) explicitly before proceeding.
 
-	"github.com/jackc/pgx/v5/pgxpool"
+- [ ] **Step 4: Write `seedAdminForTest`.** Create `backend/internal/adapter/httpapi/e2e_seed_test.go`:
+  ```go
+  package httpapi_test
 
-	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
-	"github.com/zulkhair/pustaka/backend/internal/adapter/mail"
-	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
-	"github.com/zulkhair/pustaka/backend/internal/app/auth"
-	"github.com/zulkhair/pustaka/backend/internal/config"
-)
+  import (
+  	"context"
+  	"testing"
 
-func main() {
-	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
-	slog.SetDefault(logger)
+  	"github.com/google/uuid"
 
-	if err := run(); err != nil {
-		slog.Error("server exited with error", "err", err)
-		os.Exit(1)
-	}
-}
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
+  	"github.com/zulkhair/pustaka/backend/internal/domain"
+  	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
+  )
 
-func run() error {
-	cfg, err := config.Load()
-	if err != nil {
-		return err
-	}
+  // seedAdminForTest mirrors cmd/seed: hash the password, create a pre-verified admin.
+  func seedAdminForTest(t *testing.T, st *store.Store, username, email, pw string, cost int) error {
+  	t.Helper()
+  	ctx := context.Background()
+  	ph, err := hash.HashPassword(pw, cost)
+  	if err != nil {
+  		return err
+  	}
+  	u, err := st.CreateUser(ctx, domain.CreateUserParams{
+  		ID: uuid.NewString(), Username: username, Email: email,
+  		PasswordHash: ph, Role: domain.RoleAdmin,
+  	})
+  	if err != nil {
+  		return err
+  	}
+  	return st.SetUserEmailVerified(ctx, u.ID)
+  }
+  ```
 
-	if cfg.AppEnv != "prod" {
-		if err := store.RunMigrations(cfg.DatabaseURL); err != nil {
-			return err
-		}
-		slog.Info("migrations applied")
-	} else {
-		slog.Info("APP_ENV=prod: skipping auto-migrate")
-	}
+- [ ] **Step 5: Implement `cmd/seed/main.go` — idempotent admin upsert.** Create `backend/cmd/seed/main.go`. It reads `ADMIN_USERNAME`/`ADMIN_EMAIL`/`ADMIN_PASSWORD` (with sane defaults), hashes via `pkg/hash.HashPassword` (cost from config), and upserts a pre-verified admin (`role=admin`, `email_verified=true`). The upsert is idempotent via `ON CONFLICT (username) DO UPDATE`:
+  ```go
+  package main
 
-	ctx := context.Background()
-	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
-	if err != nil {
-		return err
-	}
-	defer pool.Close()
+  import (
+  	"context"
+  	"log/slog"
+  	"os"
 
-	st := store.New(pool)
-	mailer := mail.NewResend(cfg.ResendAPIKey, cfg.MailFrom)
-	svc := auth.New(st, mailer, cfg)
+  	"github.com/google/uuid"
+  	"github.com/jackc/pgx/v5/pgxpool"
 
-	app := httpapi.BuildApp(httpapi.RouterDeps{
-		Auth:      httpapi.NewAuthHandler(svc),
-		Pinger:    pool,
-		JWTSecret: cfg.JWTSecret,
-	})
+  	"github.com/zulkhair/pustaka/backend/internal/config"
+  	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
+  )
 
-	errCh := make(chan error, 1)
-	go func() {
-		slog.Info("listening", "addr", cfg.HTTPAddr)
-		errCh <- app.Listen(cfg.HTTPAddr)
-	}()
+  func main() {
+  	if err := run(); err != nil {
+  		slog.Error("seed failed", "err", err)
+  		os.Exit(1)
+  	}
+  }
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+  func run() error {
+  	cfg, err := config.Load()
+  	if err != nil {
+  		return err
+  	}
 
-	select {
-	case err := <-errCh:
-		if err != nil && !errors.Is(err, context.Canceled) {
-			return err
-		}
-		return nil
-	case sig := <-stop:
-		slog.Info("shutdown signal received", "signal", sig.String())
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-		if err := app.ShutdownWithContext(shutdownCtx); err != nil {
-			return err
-		}
-		slog.Info("server stopped cleanly")
-		return nil
-	}
-}
-```
+  	username := getDefault("ADMIN_USERNAME", "admin")
+  	email := getDefault("ADMIN_EMAIL", "admin@pustaka.local")
+  	password := getDefault("ADMIN_PASSWORD", "admin123")
 
-- [ ] **Step 6: Add the `seed` target to the Makefile.** Edit `backend/Makefile`, appending:
-```make
-.PHONY: seed
-seed: ## Seed the admin account into the database (requires DATABASE_URL)
-	psql "$(DATABASE_URL)" -f db/seed.sql
-```
+  	ph, err := hash.HashPassword(password, cfg.BcryptCost)
+  	if err != nil {
+  		return err
+  	}
 
-- [ ] **Step 7: Document run + seed steps in the README.** In `backend/README.md`, add a "Run locally" section:
-```markdown
-## Run locally
+  	ctx := context.Background()
+  	pool, err := pgxpool.New(ctx, cfg.DatabaseURL)
+  	if err != nil {
+  		return err
+  	}
+  	defer pool.Close()
 
-```bash
-# 1. start Postgres (compose binds 127.0.0.1:5434)
-docker compose up -d db
+  	_, err = pool.Exec(ctx, `
+  		INSERT INTO web_user (id, username, email, password_hash, role, email_verified)
+  		VALUES ($1, $2, $3, $4, 'admin', true)
+  		ON CONFLICT (username) DO UPDATE
+  		SET email = EXCLUDED.email,
+  		    password_hash = EXCLUDED.password_hash,
+  		    role = 'admin',
+  		    email_verified = true
+  	`, uuid.NewString(), username, email, ph)
+  	if err != nil {
+  		return err
+  	}
+  	slog.Info("seeded admin", "username", username, "email", email)
+  	return nil
+  }
 
-# 2. copy env and fill secrets
-cp .env.example .env   # set DATABASE_URL, JWT_SECRET, RESEND_API_KEY, MAIL_FROM
+  func getDefault(key, def string) string {
+  	if v := os.Getenv(key); v != "" {
+  		return v
+  	}
+  	return def
+  }
+  ```
+  > No `db/seed.sql` is created — the seed is a real, idempotent Go command that hashes the password at runtime (no hardcoded bcrypt hash, no fake `gen_random_uuid`/`pgcrypto` comment). The bcrypt cost matches `cfg.BcryptCost`, so the seeded admin can log in via the same `CheckPassword` path.
 
-# 3. run the API (auto-migrates unless APP_ENV=prod); listens on 127.0.0.1:8002
-go run ./cmd/server
+- [ ] **Step 6: Implement `cmd/server/main.go` — composition root.** Replace the Task 1 placeholder at `backend/cmd/server/main.go`. Loads config, runs migrations unless `APP_ENV=prod`, opens the pool via `store.OpenPool` (fail-fast ping), builds Store/Mailer/Service via `mail.NewResendMailer(cfg)`, builds the app via `BuildApp`, serves with graceful shutdown:
+  ```go
+  package main
 
-# 4. seed the admin account (admin / admin123)
-make seed
-```
-```
+  import (
+  	"context"
+  	"errors"
+  	"log/slog"
+  	"os"
+  	"os/signal"
+  	"syscall"
+  	"time"
+
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/mail"
+  	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
+  	"github.com/zulkhair/pustaka/backend/internal/app/auth"
+  	"github.com/zulkhair/pustaka/backend/internal/config"
+  )
+
+  func main() {
+  	logger := slog.New(slog.NewJSONHandler(os.Stdout, nil))
+  	slog.SetDefault(logger)
+
+  	if err := run(); err != nil {
+  		slog.Error("server exited with error", "err", err)
+  		os.Exit(1)
+  	}
+  }
+
+  func run() error {
+  	cfg, err := config.Load()
+  	if err != nil {
+  		return err
+  	}
+
+  	if cfg.AppEnv != "prod" {
+  		if err := store.RunMigrations(cfg.DatabaseURL); err != nil {
+  			return err
+  		}
+  		slog.Info("migrations applied")
+  	} else {
+  		slog.Info("APP_ENV=prod: skipping auto-migrate")
+  	}
+
+  	ctx := context.Background()
+  	pool, err := store.OpenPool(ctx, cfg.DatabaseURL)
+  	if err != nil {
+  		return err
+  	}
+  	defer pool.Close()
+
+  	st := store.New(pool)
+  	mailer := mail.NewResendMailer(cfg)
+  	svc := auth.New(st, mailer, cfg)
+
+  	app := httpapi.BuildApp(httpapi.RouterDeps{
+  		Auth:      httpapi.NewAuthHandler(svc),
+  		Pinger:    pool,
+  		JWTSecret: cfg.JWTSecret,
+  	})
+
+  	errCh := make(chan error, 1)
+  	go func() {
+  		slog.Info("listening", "addr", cfg.HTTPAddr)
+  		errCh <- app.Listen(cfg.HTTPAddr)
+  	}()
+
+  	stop := make(chan os.Signal, 1)
+  	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+
+  	select {
+  	case err := <-errCh:
+  		if err != nil && !errors.Is(err, context.Canceled) {
+  			return err
+  		}
+  		return nil
+  	case sig := <-stop:
+  		slog.Info("shutdown signal received", "signal", sig.String())
+  		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+  		defer cancel()
+  		if err := app.ShutdownWithContext(shutdownCtx); err != nil {
+  			return err
+  		}
+  		slog.Info("server stopped cleanly")
+  		return nil
+  	}
+  }
+  ```
+
+- [ ] **Step 7: Add the `seed` target to the Makefile.** Edit `backend/Makefile`, appending (no `psql`, no `seed.sql` — the Go command is the source of truth):
+  ```make
+  .PHONY: seed
+  seed: ## Seed the admin account (reads ADMIN_USERNAME/EMAIL/PASSWORD; idempotent)
+  	go run ./cmd/seed
+  ```
+  Confirm the `help` target's run notes (Task 1) still describe the four steps; no README is created (house rule) — run notes live in `make help` and `.env.example` comments.
 
 - [ ] **Step 8: Run vet + the full test suite, expect PASS.** Run from `backend/`:
-```bash
-go vet ./...
-go test ./...
-```
-Expected: `go vet` clean; `TestAuthFlow_E2E` PASSES along with all earlier tests (Postgres via testcontainers, MockMailer used — no real email or GPU). State the green result explicitly.
+  ```bash
+  go vet ./...
+  go test ./...
+  ```
+  Expected: `go vet` clean; `TestAuthFlow_E2E` and `TestSeededAdminCanLogin_E2E` PASS along with all earlier tests (Postgres via testcontainers, MockMailer used — no real email or GPU). State the green result explicitly.
 
 - [ ] **Step 9: Final commit.**
-```bash
-git add backend/cmd/server/main.go backend/internal/adapter/httpapi/app.go backend/internal/adapter/httpapi/e2e_test.go backend/db/seed.sql backend/Makefile backend/README.md
-git commit -m "feat(server): wire composition root, seed admin and add auth E2E test"
-```
+  ```bash
+  git add backend/cmd backend/internal/adapter/httpapi/app.go backend/internal/adapter/httpapi/e2e_test.go backend/internal/adapter/httpapi/e2e_seed_test.go backend/Makefile backend/.env.example
+  git commit -m "feat(server): wire composition root, idempotent seed command, and auth E2E"
+  ```
+
