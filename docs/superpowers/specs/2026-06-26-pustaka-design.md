@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-26
 - **Status:** Draft for review
-- **Type:** Personal / OSS, self-hosted, single-user
+- **Type:** Personal / OSS, self-hosted, multi-user (open self-signup)
 
 ---
 
@@ -13,7 +13,7 @@ Flutter mobile app captures pages; a Go backend stores them and runs a **two-sta
 pipeline** — per-page OCR (**GLM-OCR**) then a **template-driven transform** (**qwen2.5:14b**) —
 turning scans into a chosen output format. A Kindle/Google-Books-style reader browses the
 library. All inference runs **locally via Ollama on the GPU box `msi`** over Tailscale; nothing
-leaves the user's machines.
+leaves the host. It is **multi-user** (open self-signup) — each account's library is fully private.
 
 **Long-term vision:** a general "scan → transform" engine where *templates* produce any of:
 structured data, a clean reformatted document, a filled artifact, or just searchable text.
@@ -35,9 +35,10 @@ lenient JSON parse, schema validation, GPU-free testing).
 - A **library** + a **reader** view (swipe pages: image when present, else text).
 - Store templates, OCR results, and outputs in Postgres; page images on a filesystem volume.
 - Self-host on the dev box behind Caddy, like the other apps.
+- **Multi-user:** open self-signup (register/login), per-user data isolation, and an admin role.
 
 **Non-goals (v1)** — deferred, not designed now
-- Multi-user / SaaS / accounts beyond a single self-host login.
+- Orgs / teams, **sharing** documents or templates between users, billing, or per-user quotas (flat user list; each user's data is fully private; built-in templates are shared).
 - Offline-first capture + sync (v1 is online-only).
 - User-defined templates (v1 ships built-in templates only).
 - Polished ePub/PDF export, advanced page edge-detection/deskew beyond a basic crop.
@@ -47,8 +48,11 @@ lenient JSON parse, schema validation, GPU-free testing).
 
 ## 3. Users & scope
 
-Single user, personal/self-hosted. Minimal JWT auth (one seeded user), reusing pasar's auth.
-No multi-tenant data isolation. Scale target: personal libraries (hundreds of documents).
+Multi-user, self-hosted. **Open self-signup** (register + login; JWT + bcrypt, pasar's auth
+extended). Each user's documents/outputs are **fully private** (owner-scoped); built-in templates
+are shared (global). One **admin** role (seeded) manages users + built-in templates; everyone else
+is a regular user. Scale target: a handful of users, a personal library each. Open signup means
+basic rate-limiting/validation on registration (see §11), especially if the instance is exposed.
 
 ---
 
@@ -77,20 +81,24 @@ Mobile ──capture/compress──> HTTP API ──> app/document (store page +
 Adapters: store(Postgres)  blob(filesystem)  ai(Ollama@msi via Tailscale)
 ```
 
+**Ownership** is enforced in the app/store layer: every `document`/`output` query is scoped by the
+authenticated user's `user_id`; handlers never trust a client-supplied owner. Admins may
+additionally manage built-in (global) templates and users.
+
 ---
 
 ## 5. Data model (Postgres)
 
 | Table | Key columns | Notes |
 |---|---|---|
-| `web_user` | id, username, password_hash, role | single seeded user (pasar pattern) |
-| `document` | id, title, **mode** (`photo`\|`text`), page_count, status, created_at | a captured doc |
+| `web_user` | id, username, password_hash, **role** (`admin`\|`user`), created_at | open self-signup; new users get `user`; a seeded admin exists |
+| `document` | id, **user_id** (owner), title, **mode** (`photo`\|`text`), page_count, status, created_at | a captured doc; owner-scoped |
 | `page` | id, document_id, page_number, **image_path** (nullable), **thumb_path** (nullable), width, height, status | image_path null in text mode (or after discard) |
 | `ocr_result` | id, page_id, model, text (Markdown), status, created_at | per page; re-runnable, latest wins |
-| `template` | id, name, doc_type_hint, **scope** (`page`\|`document`), prompt, **output_format** (`markdown`\|`json`\|`csv`\|`text`), json_schema (nullable), is_builtin | seeded built-ins in v1 |
-| `output` | id, document_id, template_id, content (text/JSON), file_path (nullable), model, status, created_at | one row per transform **run**; for `page`-scope templates `content` is an array (one entry per page, keyed by `page_number`), for `document`-scope a single artifact. A doc can have many outputs (different templates / re-runs). |
+| `template` | id, **owner_user_id** (nullable), name, doc_type_hint, **scope** (`page`\|`document`), prompt, **output_format** (`markdown`\|`json`\|`csv`\|`text`), json_schema (nullable), is_builtin | `owner_user_id` null = built-in/global; per-user templates later |
+| `output` | id, **user_id**, document_id, template_id, content (text/JSON), file_path (nullable), model, status, created_at | one row per transform **run**; for `page`-scope templates `content` is an array (one entry per page, keyed by `page_number`), for `document`-scope a single artifact. A doc can have many outputs (different templates / re-runs). |
 
-`status` everywhere ∈ `pending|processing|done|failed`. Money/precision not relevant here.
+`status` everywhere ∈ `pending|processing|done|failed`. **Ownership lives on `document.user_id` and `output.user_id`; `page`/`ocr_result` inherit it via `document_id`** — every read filters by the authenticated user. Money/precision not relevant here.
 
 ---
 
@@ -130,7 +138,7 @@ Configurable via env (`OLLAMA_HOST`, `OCR_MODEL`, `TRANSFORM_MODEL`). `OLLAMA_HO
 
 ## 8. API surface (Go/Fiber, `/api/*`, JWT)
 
-- `POST /auth/login`
+- `POST /auth/register` (open signup) · `POST /auth/login` · `GET /auth/me`
 - `POST /documents` `{title, mode}` · `GET /documents` (library + thumb URLs) · `GET /documents/:id`
 - `POST /documents/:id/pages` (multipart `file`) → store (+ blob if photo) → OCR → return text
 - `GET /documents/:id/pages/:n/image` · `.../thumb`
@@ -141,13 +149,15 @@ Configurable via env (`OLLAMA_HOST`, `OCR_MODEL`, `TRANSFORM_MODEL`). `OLLAMA_HO
 - `GET /version` (+ `/download`) for mobile OTA (pasar/HAKA pattern)
 - `GET /health` (reports Ollama up/down — invoice-extractor pattern)
 
-Response envelope `{status, message, data}` (pasar convention).
+Response envelope `{status, message, data}` (pasar convention). All `/documents` and `/outputs`
+(and future user `/templates`) endpoints are **owner-scoped** to the JWT principal; admin-only
+endpoints manage users and built-in templates.
 
 ---
 
 ## 9. Mobile app (Flutter, feature-first)
 
-Screens: **Login** · **Library** (thumbnail grid, mode badge, status) · **Capture** (new doc →
+Screens: **Register / Login** · **Library** (thumbnail grid, mode badge, status) · **Capture** (new doc →
 title + mode → camera, compress, upload, see per-page OCR, add next / finish) · **Reader**
 (Kindle-like: swipe pages, pinch-zoom, **image⇄text** toggle, view outputs) · **Transform**
 (pick template → run → view rendered output → export/share) · **Templates** (browse).
@@ -159,7 +169,7 @@ State: Riverpod; nav: go_router; HTTP: dio with JWT interceptor + 401 logout (HA
 ## 10. Storage & compression
 
 - **On capture (mobile):** resize to ~2048px longest edge, JPEG q~80 → ~10–20× smaller, faster upload. No OCR penalty (GLM-OCR reads fine at this resolution; invoice-extractor clamps to 1600).
-- **Server:** store the compressed image (Photo mode) + a ~400px thumbnail under `BLOB_DIR/<doc>/<page>.jpg`. Text mode: never persist the image.
+- **Server:** store the compressed image (Photo mode) + a ~400px thumbnail under `BLOB_DIR/<user>/<doc>/<page>.jpg`. Text mode: never persist the image.
 - **Outputs:** text/JSON in Postgres; binary exports (CSV/ePub/PDF) generated on demand later.
 
 ---
@@ -171,6 +181,7 @@ State: Riverpod; nav: go_router; HTTP: dio with JWT interceptor + 401 logout (HA
 - **`msi` offline / Tailscale down:** `/health` reports Ollama down; OCR/transform can be re-run
   later; captured pages/images are never lost.
 - Upload failures retry; oversized/invalid files rejected with clear errors.
+- **Open signup** gets input validation + basic rate-limiting on `/auth/register` and `/auth/login`; if the instance is exposed, front it with Caddy and consider abuse protection.
 
 ---
 
@@ -178,7 +189,7 @@ State: Riverpod; nav: go_router; HTTP: dio with JWT interceptor + 401 logout (HA
 
 - **Backend:** Go integration tests with **testcontainers-Postgres** (pasar pattern); unit-test
   the template engine's deterministic parts (prompt build, output parse/validate) with a
-  **mocked `AIClient`** — no GPU in CI, exactly like invoice-extractor.
+  **mocked `AIClient`** — no GPU in CI, exactly like invoice-extractor. Plus an **owner-isolation** test (user A cannot read or modify user B's documents/outputs) — security-critical.
 - **Mobile:** smoke/widget tests for capture→OCR and reader (later; minimal in v1).
 - **CI:** GitHub Actions — `go vet`/`go test`; Flutter analyze/test.
 
@@ -233,7 +244,8 @@ pustaka/ backend/ mobile/ docs/ scripts/(setup, pull_models) docker-compose.yml 
 Self-host on the dev box like pasar: Go API in docker compose (bound to `127.0.0.1`), Postgres,
 a `BLOB_DIR` volume, behind a Caddy subdomain (`pustaka.dev.etracrown.web.id`, wildcard DNS +
 Let's Encrypt). `OLLAMA_HOST` → `msi` over Tailscale. Mobile APK via the `/version` OTA pattern.
-**(Not advertised publicly — same caveat as invoice-extractor; add `basic_auth` if exposed.)**
+**(The app now has its own accounts + open signup, so it relies on app-level auth + signup
+rate-limiting — *not* Caddy `basic_auth`, which would block registration.)**
 
 ---
 
@@ -241,7 +253,7 @@ Let's Encrypt). `OLLAMA_HOST` → `msi` over Tailscale. Mobile APK via the `/ver
 
 User-defined templates; more template families (filled forms, CSV/XLSX, ePub/PDF export); the
 engine/app split (extract a stateless transform service); offline-first capture + sync;
-batch/whole-document OCR options; better crop/deskew; multi-user.
+batch/whole-document OCR options; better crop/deskew; orgs/teams, sharing documents/templates between users, per-user quotas.
 
 ---
 
@@ -257,6 +269,9 @@ batch/whole-document OCR options; better crop/deskew; multi-user.
   already validated and running on `msi`.
 - **Ports & adapters.** Three genuinely distinct, slow/external infra concerns (DB, blob, AI)
   justify the seams; everything else stays pasar-flat. Not over-built.
+- **Multi-user, open self-signup.** Ownership designed in from the start (every doc/output
+  owner-scoped; templates global vs per-user) rather than retrofitted. Kept to a flat user list +
+  one admin role — no orgs/teams/sharing/billing in v1 — so it stays a single implementation plan.
 
 ---
 
