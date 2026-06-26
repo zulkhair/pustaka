@@ -37,9 +37,10 @@ lenient JSON parse, schema validation, GPU-free testing).
 - Self-host on the dev box behind Caddy, like the other apps.
 - **Multi-user:** open self-signup (register/login), per-user data isolation, and an admin role.
 - **Email-verified registration:** confirm the address before activation, via **Resend** behind a swappable **Mailer port**.
+- **Document sharing:** an owner can share a document **read-only** with other (verified) users; recipients see it in a "Shared with me" view.
 
 **Non-goals (v1)** — deferred, not designed now
-- Orgs / teams, **sharing** documents or templates between users, billing, or per-user quotas (flat user list; each user's data is fully private; built-in templates are shared).
+- Orgs / teams, **collaborative editing** of shared docs, **public share links**, sharing **templates**, billing, or per-user quotas (v1 sharing is read-only, user-to-user, owner-managed; built-in templates are shared).
 - Password reset / magic-link login / 2FA (later — the same Mailer port enables them).
 - Offline-first capture + sync (v1 is online-only).
 - User-defined templates (v1 ships built-in templates only).
@@ -56,7 +57,9 @@ are shared (global). One **admin** role (seeded) manages users + built-in templa
 is a regular user. Scale target: a handful of users, a personal library each. Open signup means
 basic rate-limiting/validation on registration (see §11), especially if the instance is exposed.
 Registration requires **email verification** (a one-time code emailed via Resend) before the
-account is activated and can obtain a session.
+account is activated and can obtain a session. A document's owner may **share it read-only** with
+other verified users; a user can access a document if they **own it or it is shared with them**
+(writes stay owner-only).
 
 ---
 
@@ -86,9 +89,11 @@ Mobile ──capture/compress──> HTTP API ──> app/document (store page +
 Adapters: store(Postgres)  blob(filesystem)  ai(Ollama@msi via Tailscale)
 ```
 
-**Ownership** is enforced in the app/store layer: every `document`/`output` query is scoped by the
-authenticated user's `user_id`; handlers never trust a client-supplied owner. Admins may
-additionally manage built-in (global) templates and users.
+**Access control** is centralized in the app layer: a user may **read** a document (and its pages,
+OCR, outputs, images) if they **own it OR it is shared with them**; **writes** (edit / delete /
+transform / share) stay **owner-only**. Every request runs through one `authorizeDoc(user, doc, perm)`
+helper; handlers never trust a client-supplied owner. Admins additionally manage built-in (global)
+templates and users.
 
 ---
 
@@ -104,8 +109,9 @@ additionally manage built-in (global) templates and users.
 | `ocr_result` | id, page_id, model, text (Markdown), status, created_at | per page; re-runnable, latest wins |
 | `template` | id, **owner_user_id** (nullable), name, doc_type_hint, **scope** (`page`\|`document`), prompt, **output_format** (`markdown`\|`json`\|`csv`\|`text`), json_schema (nullable), is_builtin | `owner_user_id` null = built-in/global; per-user templates later |
 | `output` | id, **user_id**, document_id, template_id, content (text/JSON), file_path (nullable), model, status, created_at | one row per transform **run**; for `page`-scope templates `content` is an array (one entry per page, keyed by `page_number`), for `document`-scope a single artifact. A doc can have many outputs (different templates / re-runs). |
+| `document_share` | id, document_id, shared_with_user_id, **permission** (`viewer`\|`editor`), created_at; **unique(document_id, shared_with_user_id)** | owner shares a doc; v1 issues `viewer` only (`editor` reserved for later) |
 
-`status` everywhere ∈ `pending|processing|done|failed`. **Ownership lives on `document.user_id` and `output.user_id`; `page`/`ocr_result` inherit it via `document_id`** — every read filters by the authenticated user. Money/precision not relevant here.
+`status` everywhere ∈ `pending|processing|done|failed`. **Ownership lives on `document.user_id` and `output.user_id`; `page`/`ocr_result` inherit it via `document_id`** — **reads are allowed for the owner *or* a user the doc is shared with (`document_share`); writes stay owner-only.** Money/precision not relevant here.
 
 ---
 
@@ -146,7 +152,8 @@ Configurable via env (`OLLAMA_HOST`, `OCR_MODEL`, `TRANSFORM_MODEL`). `OLLAMA_HO
 ## 8. API surface (Go/Fiber, `/api/*`, JWT)
 
 - `POST /auth/register` (open signup → unverified user, emails a code) · `POST /auth/verify-email` `{email, code}` (activate → tokens) · `POST /auth/resend-verification` `{email}` (throttled) · `POST /auth/login` (rejected until verified) · `POST /auth/refresh` (rotate) · `POST /auth/logout` (revoke) · `GET /auth/me`
-- `POST /documents` `{title, mode}` · `GET /documents` (library + thumb URLs) · `GET /documents/:id`
+- `POST /documents` `{title, mode}` · `GET /documents` (library: owned + **shared-with-me**, with thumb URLs) · `GET /documents/:id`
+- `POST /documents/:id/shares` `{email, permission}` (owner) · `GET /documents/:id/shares` (owner) · `DELETE /documents/:id/shares/:userId` (owner — revoke)
 - `POST /documents/:id/pages` (multipart `file`) → store (+ blob if photo) → OCR → return text
 - `GET /documents/:id/pages/:n/image` · `.../thumb`
 - `POST /documents/:id/pages/:n/ocr` (re-run OCR) 
@@ -164,10 +171,10 @@ endpoints manage users and built-in templates.
 
 ## 9. Mobile app (Flutter, feature-first)
 
-Screens: **Register / Verify-email / Login** · **Library** (thumbnail grid, mode badge, status) · **Capture** (new doc →
+Screens: **Register / Verify-email / Login** · **Library** (thumbnail grid; **Mine / Shared-with-me** sections; mode badge, status) · **Capture** (new doc →
 title + mode → camera, compress, upload, see per-page OCR, add next / finish) · **Reader**
 (Kindle-like: swipe pages, pinch-zoom, **image⇄text** toggle, view outputs) · **Transform**
-(pick template → run → view rendered output → export/share) · **Templates** (browse).
+(pick template → run → view rendered output → export/share) · **Templates** (browse) · **Share** (owner adds a user by email; shared docs are read-only for recipients).
 
 State: Riverpod; nav: go_router; HTTP: dio with an interceptor that **refreshes on 401** then retries (logout if refresh fails). Tokens (access + refresh) kept in **flutter_secure_storage**, not plain SharedPreferences.
 
@@ -190,7 +197,7 @@ State: Riverpod; nav: go_router; HTTP: dio with an interceptor that **refreshes 
 - **Rate-limiting** on `register`/`login`/`verify-email`/`resend`/`refresh` (per-IP + per-account); login backoff/lockout.
 - **Enumeration-resistant:** generic responses on register/resend/verify; **constant-time** comparison of codes/secrets.
 - **Transport & secrets:** HTTPS only (Caddy); `RESEND_API_KEY`, JWT secret, DB creds in gitignored env; Resend uses a **verified sending domain** (SPF/DKIM/DMARC) so mail isn't spoofable.
-- **Authorization:** owner-scoping (§4/§5) enforced server-side on every request; admin checks on admin-only routes.
+- **Authorization:** one centralized access check on **every** doc / page / OCR / output / **image** request — owner *or* active share for reads, **owner-only** for writes; **revoking a share cuts access immediately**; share targets must be **existing verified users**; admin checks on admin-only routes.
 
 **Operational:**
 
@@ -207,7 +214,7 @@ State: Riverpod; nav: go_router; HTTP: dio with an interceptor that **refreshes 
 
 - **Backend:** Go integration tests with **testcontainers-Postgres** (pasar pattern); unit-test
   the template engine's deterministic parts (prompt build, output parse/validate) with a
-  **mocked `AIClient`** — no GPU in CI, exactly like invoice-extractor. Plus an **owner-isolation** test (user A cannot read or modify user B's documents/outputs) — security-critical. Auth flow tested with a **mocked `Mailer` port** (no real email): verify-code happy path, expiry, attempt cap, unverified-login rejection, refresh rotation + revocation, and rate-limit behavior.
+  **mocked `AIClient`** — no GPU in CI, exactly like invoice-extractor. Plus **access-control** tests (user A can't touch B's un-shared docs; a **sharee can read but not write** a shared doc, incl. its images/outputs; **revoke cuts access immediately**) — security-critical. Auth flow tested with a **mocked `Mailer` port** (no real email): verify-code happy path, expiry, attempt cap, unverified-login rejection, refresh rotation + revocation, and rate-limit behavior.
 - **Mobile:** smoke/widget tests for capture→OCR and reader (later; minimal in v1).
 - **CI:** GitHub Actions — `go vet`/`go test`; Flutter analyze/test.
 
@@ -272,7 +279,7 @@ rate-limiting — *not* Caddy `basic_auth`, which would block registration.)**
 
 User-defined templates; more template families (filled forms, CSV/XLSX, ePub/PDF export); the
 engine/app split (extract a stateless transform service); offline-first capture + sync;
-batch/whole-document OCR options; better crop/deskew; orgs/teams, sharing documents/templates between users, per-user quotas; **password reset, magic-link login, 2FA, and extra Mailer adapters (SMTP/SES)** — all enabled by the Mailer port.
+batch/whole-document OCR options; better crop/deskew; orgs/teams, sharing documents/templates between users, per-user quotas; **password reset, magic-link login, 2FA, and extra Mailer adapters (SMTP/SES)** — all enabled by the Mailer port. Sharing upgrades: **collaborative editing (editor permission), public share links, and sharing templates**.
 
 ---
 
@@ -295,6 +302,9 @@ batch/whole-document OCR options; better crop/deskew; orgs/teams, sharing docume
   password-reset / magic-link) drop in without touching call sites. Security hardening (hashed
   single-use codes, rate-limits, refresh-token rotation, enumeration-resistance) is specified up
   front given the "very good security" requirement.
+- **Read-only document sharing.** Owner-to-user, `viewer` only in v1 (the `permission` enum
+  reserves `editor`), enforced by one centralized access check across docs/pages/OCR/outputs/images
+  so the authorization surface stays small and auditable. Collaborative editing / public links deferred.
 
 ---
 
@@ -305,3 +315,4 @@ batch/whole-document OCR options; better crop/deskew; orgs/teams, sharing docume
 - Output export formats priority for v2 (CSV vs ePub vs PDF).
 - Email verification UX: **6-digit code** (chosen — best mobile UX) vs magic-link (needs deep-linking). Flip if you prefer links.
 - Confirm the **access + refresh** token model (chosen for security) vs a single longer-lived JWT (simpler).
+- Sharing permission: **viewer-only** (chosen for v1) — do you also want **editor/collaborative** sharing? (bigger scope; deferred by default.)
