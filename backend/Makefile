@@ -1,4 +1,4 @@
-.PHONY: help run test vet lint sqlc migrate seed db-up db-down
+.PHONY: help run test int-test int-test-real vet lint sqlc migrate seed db-up db-down
 
 help: ## Show run notes and available targets
 	@echo "Pustaka backend — local dev"
@@ -15,6 +15,12 @@ seed:
 
 test:
 	go test ./...
+
+int-test:
+	go test -tags=integration ./test/integration/... -count=1 -v
+
+int-test-real:
+	OLLAMA_REAL=1 go test -tags=integration ./test/integration/... -count=1 -v -timeout 20m
 
 vet:
 	go vet ./...
