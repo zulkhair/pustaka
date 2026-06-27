@@ -26,7 +26,7 @@ func newStore(t *testing.T) *store.Store {
 		postgres.WithUsername("pustaka"),
 		postgres.WithPassword("pustaka"),
 		testcontainers.WithWaitStrategy(
-			wait.ForListeningPort("5432/tcp").WithStartupTimeout(60*time.Second)),
+			wait.ForLog("database system is ready to accept connections").WithOccurrence(2).WithStartupTimeout(60*time.Second)),
 	)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = ctr.Terminate(ctx) })
