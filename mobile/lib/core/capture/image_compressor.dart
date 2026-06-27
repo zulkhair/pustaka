@@ -10,7 +10,12 @@ const _quality = 80;
 /// Pure-Dart compression (no platform channel): decode → cap longest edge at
 /// 2048 → re-encode JPEG q80. Used by tests and the pure-Dart compressor.
 Uint8List compressBytes(Uint8List input) {
-  final decoded = img.decodeImage(input);
+  img.Image? decoded;
+  try {
+    decoded = img.decodeImage(input);
+  } catch (_) {
+    return input; // not a decodable image; leave bytes untouched
+  }
   if (decoded == null) return input;
   final longest =
       decoded.width >= decoded.height ? decoded.width : decoded.height;
