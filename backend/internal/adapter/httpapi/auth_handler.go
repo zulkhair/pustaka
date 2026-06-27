@@ -64,3 +64,21 @@ func (h *AuthHandler) VerifyEmail(c *fiber.Ctx) error {
 		ExpiresIn:    tokens.ExpiresIn,
 	})
 }
+
+type ResendReq struct {
+	Email string `json:"email"`
+}
+
+func (h *AuthHandler) ResendVerification(c *fiber.Ctx) error {
+	var req ResendReq
+	if err := c.BodyParser(&req); err != nil {
+		return Fail(c, fiber.StatusBadRequest, "invalid request body")
+	}
+	if req.Email == "" {
+		return Fail(c, fiber.StatusBadRequest, "email is required")
+	}
+	if err := h.svc.ResendVerification(c.Context(), req.Email); err != nil {
+		return mapAuthError(c, err)
+	}
+	return OK(c, nil) // always the same generic 200 (no cooldown signal leaks)
+}

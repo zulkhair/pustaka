@@ -215,3 +215,59 @@ func (s *Service) VerifyEmail(ctx context.Context, in VerifyInput) (Tokens, erro
 	}
 	return tokens, nil
 }
+
+func (s *Service) ResendVerification(ctx context.Context, email string) error {
+	email = normalizeEmail(email)
+	if err := s.resendVerification(ctx, email); err != nil {
+		if errors.Is(err, domain.ErrResendCooldown) {
+			return nil // SILENT no-op: cooldown is never surfaced
+		}
+		return err
+	}
+	return nil
+}
+
+func (s *Service) resendVerification(ctx context.Context, email string) error {
+	u, err := s.store.GetUserByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil // enumeration-safe no-op
+		}
+		return err
+	}
+	if u.EmailVerified {
+		return nil // enumeration-safe no-op
+	}
+
+	existing, err := s.store.GetActiveEmailVerification(ctx, u.ID)
+	if err == nil {
+		if time.Since(existing.CreatedAt) < s.cfg.ResendCooldown {
+			return domain.ErrResendCooldown
+		}
+	} else if !errors.Is(err, domain.ErrNotFound) {
+		return err
+	}
+
+	if err := s.store.DeleteEmailVerificationsByUser(ctx, u.ID); err != nil {
+		return err
+	}
+
+	code, err := hash.GenerateNumericCode(6)
+	if err != nil {
+		return err
+	}
+	codeHash, err := hash.HashCode(code, s.cfg.BcryptCost)
+	if err != nil {
+		return err
+	}
+	if _, err := s.store.CreateEmailVerification(ctx, domain.CreateEmailVerificationParams{
+		ID:        uuid.NewString(),
+		UserID:    u.ID,
+		CodeHash:  codeHash,
+		ExpiresAt: time.Now().Add(s.cfg.CodeTTL),
+	}); err != nil {
+		return err
+	}
+
+	return s.mailer.SendVerificationCode(ctx, u.Email, code)
+}
