@@ -1,0 +1,1 @@
+CREATE TABLE smoke (id INT PRIMARY KEY);
