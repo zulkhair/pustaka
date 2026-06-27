@@ -28,3 +28,26 @@ jobs:
 
       - name: Test
         run: go test ./...
+
+  integration:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: backend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+
+      - name: Download modules
+        run: go mod download
+
+      # End-to-end suite: boots the real server binary over HTTP against a
+      # testcontainers Postgres + a fake Ollama (mocked AI). Docker is preinstalled
+      # on ubuntu runners. The real-LLM path (OLLAMA_REAL=1) is not run in CI.
+      - name: Integration test
+        run: go test -tags=integration ./test/integration/... -count=1
