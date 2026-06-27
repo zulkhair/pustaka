@@ -3,9 +3,12 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pustaka/core/auth/auth_controller.dart';
 import 'package:pustaka/core/auth/auth_state.dart';
+import 'package:pustaka/core/di/providers.dart';
 import 'package:pustaka/core/router/app_router.dart';
 import 'package:pustaka/features/auth/presentation/login_screen.dart';
 import 'package:pustaka/features/auth/presentation/verify_email_screen.dart';
+
+import '../../support/fake_api.dart';
 
 class _FakeAuth extends AuthController {
   _FakeAuth(this._status);
@@ -18,7 +21,12 @@ class _FakeAuth extends AuthController {
 Future<void> _pump(WidgetTester tester, AuthStatus status) async {
   await tester.pumpWidget(
     ProviderScope(
-      overrides: [authControllerProvider.overrideWith(() => _FakeAuth(status))],
+      overrides: [
+        authControllerProvider.overrideWith(() => _FakeAuth(status)),
+        // The authenticated route mounts LibraryScreen + UpdateGate, which would
+        // hit the network; give them an instant fake so pumpAndSettle settles.
+        apiClientProvider.overrideWithValue(apiClientReturningData(<String, dynamic>{})),
+      ],
       child: Consumer(
         builder: (context, ref, _) =>
             MaterialApp.router(routerConfig: ref.watch(appRouterProvider)),
