@@ -8,6 +8,16 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Document struct {
+	ID        string             `json:"id"`
+	UserID    string             `json:"user_id"`
+	Title     string             `json:"title"`
+	Mode      string             `json:"mode"`
+	PageCount int32              `json:"page_count"`
+	Status    string             `json:"status"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
 type EmailVerification struct {
 	ID         string             `json:"id"`
 	UserID     string             `json:"user_id"`
@@ -18,6 +28,38 @@ type EmailVerification struct {
 	CreatedAt  pgtype.Timestamptz `json:"created_at"`
 }
 
+type OcrResult struct {
+	ID        string             `json:"id"`
+	PageID    string             `json:"page_id"`
+	Model     string             `json:"model"`
+	Text      string             `json:"text"`
+	Status    string             `json:"status"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type Output struct {
+	ID         string             `json:"id"`
+	UserID     string             `json:"user_id"`
+	DocumentID string             `json:"document_id"`
+	TemplateID string             `json:"template_id"`
+	Content    string             `json:"content"`
+	FilePath   *string            `json:"file_path"`
+	Model      string             `json:"model"`
+	Status     string             `json:"status"`
+	CreatedAt  pgtype.Timestamptz `json:"created_at"`
+}
+
+type Page struct {
+	ID         string  `json:"id"`
+	DocumentID string  `json:"document_id"`
+	PageNumber int32   `json:"page_number"`
+	ImagePath  *string `json:"image_path"`
+	ThumbPath  *string `json:"thumb_path"`
+	Width      int32   `json:"width"`
+	Height     int32   `json:"height"`
+	Status     string  `json:"status"`
+}
+
 type Session struct {
 	ID               string             `json:"id"`
 	UserID           string             `json:"user_id"`
@@ -25,6 +67,18 @@ type Session struct {
 	ExpiresAt        pgtype.Timestamptz `json:"expires_at"`
 	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 	RevokedAt        pgtype.Timestamptz `json:"revoked_at"`
+}
+
+type Template struct {
+	ID           string  `json:"id"`
+	OwnerUserID  *string `json:"owner_user_id"`
+	Name         string  `json:"name"`
+	DocTypeHint  string  `json:"doc_type_hint"`
+	Scope        string  `json:"scope"`
+	Prompt       string  `json:"prompt"`
+	OutputFormat string  `json:"output_format"`
+	JsonSchema   *string `json:"json_schema"`
+	IsBuiltin    bool    `json:"is_builtin"`
 }
 
 type WebUser struct {
