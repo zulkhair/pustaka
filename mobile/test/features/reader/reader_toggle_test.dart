@@ -88,4 +88,24 @@ void main() {
     expect(find.byIcon(Icons.text_fields), findsNothing);
     expect(find.byIcon(Icons.image), findsNothing);
   });
+
+  testWidgets('non-owner reader hides Transform and Share actions',
+      (tester) async {
+    final state = ReaderState(
+      doc: _doc(),
+      pages: const [
+        DocPage(
+            pageNumber: 1,
+            status: DocStatus.done,
+            hasImage: false,
+            ocrText: 'x',
+            ocrStatus: DocStatus.done),
+      ],
+      outputs: const [],
+      isOwner: false,
+    );
+    await _pump(tester, state);
+    expect(find.byIcon(Icons.auto_awesome), findsNothing);
+    expect(find.byIcon(Icons.share), findsNothing);
+  });
 }

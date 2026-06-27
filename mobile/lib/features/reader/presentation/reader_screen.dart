@@ -33,12 +33,18 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
                 icon: Icon(_showImage ? Icons.text_fields : Icons.image),
                 onPressed: () => setState(() => _showImage = !_showImage),
               ),
-            if (async.valueOrNull?.isOwner ?? false)
+            if (async.valueOrNull?.isOwner ?? false) ...[
               IconButton(
                 tooltip: 'Transform',
                 icon: const Icon(Icons.auto_awesome),
                 onPressed: () => context.go('/doc/${widget.docId}/transform'),
               ),
+              IconButton(
+                tooltip: 'Share',
+                icon: const Icon(Icons.share),
+                onPressed: () => context.go('/doc/${widget.docId}/share'),
+              ),
+            ],
           ],
           bottom:
               const TabBar(tabs: [Tab(text: 'Pages'), Tab(text: 'Outputs')]),

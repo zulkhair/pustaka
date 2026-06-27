@@ -8,6 +8,7 @@ import '../../features/auth/presentation/verify_email_screen.dart';
 import '../../features/capture/presentation/capture_screen.dart';
 import '../../features/library/presentation/library_screen.dart';
 import '../../features/reader/presentation/reader_screen.dart';
+import '../../features/sharing/presentation/share_screen.dart';
 import '../../features/templates/presentation/templates_screen.dart';
 import '../../features/transform/presentation/output_screen.dart';
 import '../../features/transform/presentation/transform_screen.dart';
@@ -96,23 +97,9 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
               name: 'share',
               path: '/doc/:id/share',
-              builder: (c, s) => const _Stub('Share')),
+              builder: (c, s) => ShareScreen(docId: s.pathParameters['id']!)),
         ],
       ),
     ],
   );
 });
-
-/// Temporary placeholder screen, replaced by each feature task.
-class _Stub extends StatelessWidget {
-  const _Stub(this.label);
-  final String label;
-
-  @override
-  Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(label)),
-      body: Center(child: Text(label)),
-    );
-  }
-}
