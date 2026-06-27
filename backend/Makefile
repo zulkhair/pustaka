@@ -23,3 +23,6 @@ db-up:
 
 db-down:
 	docker compose down
+
+sqlc:
+	sqlc generate
