@@ -41,3 +41,19 @@ ApiClient apiClientReturningData(Object? data) {
       (_) => jsonResponse({'status': 0, 'message': 'ok', 'data': data}));
   return ApiClient(dio);
 }
+
+/// A 1x1 transparent PNG — a valid image so Image.memory decodes without error.
+final Uint8List kTinyPng = base64Decode(
+  'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==',
+);
+
+/// An ApiClient whose getBytes resolves immediately to [bytes] (a valid image).
+ApiClient apiClientReturningBytes(Uint8List bytes) {
+  final dio = Dio(BaseOptions(baseUrl: 'http://test/api'));
+  dio.httpClientAdapter = _Adapter(
+    (_) => ResponseBody.fromBytes(bytes, 200, headers: {
+      Headers.contentTypeHeader: ['image/png'],
+    }),
+  );
+  return ApiClient(dio);
+}

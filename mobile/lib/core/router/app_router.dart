@@ -7,6 +7,7 @@ import '../../features/auth/presentation/register_screen.dart';
 import '../../features/auth/presentation/verify_email_screen.dart';
 import '../../features/capture/presentation/capture_screen.dart';
 import '../../features/library/presentation/library_screen.dart';
+import '../../features/reader/presentation/reader_screen.dart';
 import '../auth/auth_controller.dart';
 import '../auth/auth_state.dart';
 
@@ -74,7 +75,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
               name: 'reader',
               path: '/doc/:id',
-              builder: (c, s) => const _Stub('Reader')),
+              builder: (c, s) => ReaderScreen(docId: s.pathParameters['id']!)),
           GoRoute(
             name: 'transform',
             path: '/doc/:id/transform',
