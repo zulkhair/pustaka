@@ -60,6 +60,9 @@ func Mount(app *fiber.App, deps RouterDeps) {
 	docs.Get("/:id/pages/:n/thumb", deps.Page.Thumb)
 	docs.Post("/:id/pages/:n/ocr", deps.Page.RerunOCR)
 	docs.Post("/:id/transform", deps.Transform.Run)
+	docs.Post("/:id/shares", deps.Doc.CreateShare)
+	docs.Get("/:id/shares", deps.Doc.ListShares)
+	docs.Delete("/:id/shares/:userId", deps.Doc.RevokeShare)
 
 	api.Get("/templates", auth, deps.Template.List)
 	api.Get("/outputs/:id", auth, deps.Output.Get)

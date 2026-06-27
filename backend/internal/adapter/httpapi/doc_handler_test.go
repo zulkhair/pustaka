@@ -41,9 +41,13 @@ func TestDocCreateAndGet(t *testing.T) {
 
 	code, env = getJSON(t, ta, "/api/documents")
 	require.Equal(t, http.StatusOK, code)
-	var list []map[string]any
+	var list struct {
+		Owned  []map[string]any `json:"owned"`
+		Shared []map[string]any `json:"shared"`
+	}
 	decodeData(t, env, &list)
-	require.Len(t, list, 1)
+	require.Len(t, list.Owned, 1)
+	require.Empty(t, list.Shared)
 }
 
 func TestDocCreateValidation(t *testing.T) {

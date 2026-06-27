@@ -6,6 +6,7 @@ import (
 	"github.com/gofiber/fiber/v2"
 
 	"github.com/zulkhair/pustaka/backend/internal/app/document"
+	"github.com/zulkhair/pustaka/backend/internal/domain"
 )
 
 type DocHandler struct {
@@ -53,10 +54,18 @@ func (h *DocHandler) List(c *fiber.Ctx) error {
 	if !ok {
 		return Fail(c, fiber.StatusUnauthorized, "unauthorized")
 	}
-	docs, err := h.svc.List(c.Context(), uid)
+	owned, shared, err := h.svc.ListDocumentsWithShared(c.Context(), uid)
 	if err != nil {
 		return mapDocError(c, err)
 	}
+	return OK(c, fiber.Map{
+		"owned":  toDocDTOs(owned),
+		"shared": toDocDTOs(shared),
+	})
+}
+
+// toDocDTOs builds the inline docDTO list, reused for both the owned and shared arrays.
+func toDocDTOs(docs []domain.Document) []docDTO {
 	out := make([]docDTO, 0, len(docs))
 	for _, d := range docs {
 		dto := docDTO{
@@ -68,7 +77,7 @@ func (h *DocHandler) List(c *fiber.Ctx) error {
 		}
 		out = append(out, dto)
 	}
-	return OK(c, out)
+	return out
 }
 
 type pageDTO struct {
