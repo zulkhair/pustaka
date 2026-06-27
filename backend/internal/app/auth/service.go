@@ -376,3 +376,14 @@ func (s *Service) Logout(ctx context.Context, refreshToken string) error {
 	}
 	return s.store.RevokeSession(ctx, sess.ID)
 }
+
+func (s *Service) Me(ctx context.Context, userID string) (domain.User, error) {
+	u, err := s.store.GetUserByID(ctx, userID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return domain.User{}, domain.ErrNotFound
+		}
+		return domain.User{}, err
+	}
+	return u, nil
+}

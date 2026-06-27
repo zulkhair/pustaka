@@ -150,3 +150,29 @@ func (h *AuthHandler) Logout(c *fiber.Ctx) error {
 	}
 	return OK(c, nil)
 }
+
+type MeDTO struct {
+	ID            string `json:"id"`
+	Username      string `json:"username"`
+	Email         string `json:"email"`
+	Role          string `json:"role"`
+	EmailVerified bool   `json:"emailVerified"`
+}
+
+func (h *AuthHandler) Me(c *fiber.Ctx) error {
+	userID, _ := c.Locals("userID").(string)
+	if userID == "" {
+		return Fail(c, fiber.StatusUnauthorized, "unauthorized")
+	}
+	u, err := h.svc.Me(c.Context(), userID)
+	if err != nil {
+		return mapAuthError(c, err)
+	}
+	return OK(c, MeDTO{
+		ID:            u.ID,
+		Username:      u.Username,
+		Email:         u.Email,
+		Role:          u.Role,
+		EmailVerified: u.EmailVerified,
+	})
+}
