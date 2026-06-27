@@ -17,4 +17,7 @@ var (
 	ErrResendCooldown = errors.New("resend cooldown active")
 	ErrUnauthorized   = errors.New("unauthorized")
 	ErrForbidden      = errors.New("forbidden")
+
+	ErrUnsupportedFormat = errors.New("unsupported output format")
+	ErrSchemaInvalid     = errors.New("output failed schema validation")
 )
