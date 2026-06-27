@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import '../../features/auth/presentation/login_screen.dart';
 import '../../features/auth/presentation/register_screen.dart';
 import '../../features/auth/presentation/verify_email_screen.dart';
+import '../../features/library/presentation/library_screen.dart';
 import '../auth/auth_controller.dart';
 import '../auth/auth_state.dart';
 
@@ -64,7 +65,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
               name: 'library',
               path: '/',
-              builder: (c, s) => const _Stub('Library')),
+              builder: (c, s) => const LibraryScreen()),
           GoRoute(
               name: 'capture',
               path: '/capture',
