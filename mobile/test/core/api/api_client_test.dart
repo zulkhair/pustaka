@@ -46,9 +46,14 @@ ApiClient _clientWith(_FakeAdapter adapter) {
 void main() {
   test('get decodes envelope and returns parsed data', () async {
     final client = _clientWith(_FakeAdapter(
-      (_) async => _json({'status': 0, 'message': 'ok', 'data': {'x': 1}}),
+      (_) async => _json({
+        'status': 0,
+        'message': 'ok',
+        'data': {'x': 1}
+      }),
     ));
-    final out = await client.get<int>('/x', parse: (d) => (d! as Map)['x'] as int);
+    final out =
+        await client.get<int>('/x', parse: (d) => (d! as Map)['x'] as int);
     expect(out, 1);
   });
 
@@ -64,7 +69,8 @@ void main() {
 
   test('connection error throws NetworkFailure', () async {
     final client = _clientWith(_FakeAdapter(
-      (o) async => throw DioException(requestOptions: o, type: DioExceptionType.connectionError),
+      (o) async => throw DioException(
+          requestOptions: o, type: DioExceptionType.connectionError),
     ));
     expect(
       () => client.get<Object?>('/x', parse: (d) => d),
@@ -72,9 +78,14 @@ void main() {
     );
   });
 
-  test('upload builds a multipart form with the file part and extra fields', () async {
+  test('upload builds a multipart form with the file part and extra fields',
+      () async {
     final adapter = _FakeAdapter(
-      (_) async => _json({'status': 0, 'message': 'ok', 'data': {'ok': true}}),
+      (_) async => _json({
+        'status': 0,
+        'message': 'ok',
+        'data': {'ok': true}
+      }),
     );
     final client = _clientWith(adapter);
     await client.upload<Map<String, dynamic>>(
@@ -93,9 +104,10 @@ void main() {
 
   test('getBytes returns raw bytes', () async {
     final client = _clientWith(_FakeAdapter(
-      (_) async => ResponseBody.fromBytes([9, 8, 7], 200, headers: {
-        Headers.contentTypeHeader: ['image/jpeg'],
-      }),
+      (_) async => ResponseBody.fromBytes([9, 8, 7], 200,
+          headers: {
+            Headers.contentTypeHeader: ['image/jpeg'],
+          }),
     ));
     final bytes = await client.getBytes('/documents/d1/pages/1/image');
     expect(bytes, Uint8List.fromList([9, 8, 7]));

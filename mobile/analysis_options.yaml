@@ -7,4 +7,3 @@ analyzer:
 linter:
   rules:
     prefer_const_constructors: true
-    require_trailing_commas: true

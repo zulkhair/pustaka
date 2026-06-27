@@ -45,8 +45,10 @@ ResponseBody _body(Map<String, dynamic> m, int status) {
   required void Function() onAuthLost,
 }) {
   final adapter = _Adapter();
-  final retry = Dio(BaseOptions(baseUrl: 'http://t'))..httpClientAdapter = adapter;
-  final dio = Dio(BaseOptions(baseUrl: 'http://t'))..httpClientAdapter = adapter;
+  final retry = Dio(BaseOptions(baseUrl: 'http://t'))
+    ..httpClientAdapter = adapter;
+  final dio = Dio(BaseOptions(baseUrl: 'http://t'))
+    ..httpClientAdapter = adapter;
   dio.interceptors.add(AuthInterceptor(
     storage: storage,
     onRefresh: onRefresh,
@@ -60,7 +62,8 @@ void main() {
   test('onRequest attaches bearer token from storage', () async {
     final storage = FakeTokenStorage();
     await storage.write(access: 'access1', refresh: 'r1');
-    final b = _build(storage: storage, onRefresh: () async => 'new', onAuthLost: () {});
+    final b = _build(
+        storage: storage, onRefresh: () async => 'new', onAuthLost: () {});
     await b.dio.get<dynamic>('/ok');
     expect(b.adapter.lastAuthHeader, 'Bearer access1');
   });
@@ -91,7 +94,8 @@ void main() {
       onRefresh: () async => null,
       onAuthLost: () => lost = true,
     );
-    await expectLater(b.dio.get<dynamic>('/needauth'), throwsA(isA<DioException>()));
+    await expectLater(
+        b.dio.get<dynamic>('/needauth'), throwsA(isA<DioException>()));
     expect(lost, isTrue);
   });
 
@@ -108,7 +112,8 @@ void main() {
       },
       onAuthLost: () {},
     );
-    await Future.wait([b.dio.get<dynamic>('/needauth'), b.dio.get<dynamic>('/needauth')]);
+    await Future.wait(
+        [b.dio.get<dynamic>('/needauth'), b.dio.get<dynamic>('/needauth')]);
     expect(refreshCalls, 1);
   });
 }

@@ -4,7 +4,11 @@ import 'package:pustaka/core/api/api_response.dart';
 void main() {
   test('parses data and isOk when status 0', () {
     final r = ApiResponse<Map<String, dynamic>>.fromJson(
-      {'status': 0, 'message': 'ok', 'data': {'x': 1}},
+      {
+        'status': 0,
+        'message': 'ok',
+        'data': {'x': 1}
+      },
       (d) => d as Map<String, dynamic>,
     );
     expect(r.isOk, isTrue);

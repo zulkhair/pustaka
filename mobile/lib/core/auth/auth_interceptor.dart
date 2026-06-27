@@ -22,7 +22,8 @@ class AuthInterceptor extends Interceptor {
   Future<String?>? _refreshing;
 
   @override
-  Future<void> onRequest(RequestOptions options, RequestInterceptorHandler handler) async {
+  Future<void> onRequest(
+      RequestOptions options, RequestInterceptorHandler handler) async {
     final tokens = await storage.read();
     final access = tokens.access;
     if (access != null && access.isNotEmpty) {
@@ -32,7 +33,8 @@ class AuthInterceptor extends Interceptor {
   }
 
   @override
-  Future<void> onError(DioException err, ErrorInterceptorHandler handler) async {
+  Future<void> onError(
+      DioException err, ErrorInterceptorHandler handler) async {
     final opts = err.requestOptions;
     final is401 = err.response?.statusCode == 401;
     final isRefreshCall = opts.path.contains('/auth/refresh');
