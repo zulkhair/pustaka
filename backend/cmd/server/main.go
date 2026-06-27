@@ -9,10 +9,16 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/zulkhair/pustaka/backend/internal/adapter/ai"
+	"github.com/zulkhair/pustaka/backend/internal/adapter/blob"
 	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
 	"github.com/zulkhair/pustaka/backend/internal/adapter/mail"
 	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
 	"github.com/zulkhair/pustaka/backend/internal/app/auth"
+	"github.com/zulkhair/pustaka/backend/internal/app/document"
+	"github.com/zulkhair/pustaka/backend/internal/app/ocr"
+	"github.com/zulkhair/pustaka/backend/internal/app/template"
+	"github.com/zulkhair/pustaka/backend/internal/app/transform"
 	"github.com/zulkhair/pustaka/backend/internal/config"
 )
 
@@ -52,10 +58,23 @@ func run() error {
 	mailer := mail.NewResendMailer(cfg)
 	svc := auth.New(st, mailer, cfg)
 
+	blobStore := blob.New(cfg.BlobDir)
+	aiClient := ai.NewOllama(cfg)
+	docSvc := document.New(st, blobStore)
+	ocrSvc := ocr.New(st, aiClient, blobStore)
+	tmplSvc := template.New(st)
+	xfSvc := transform.New(st, aiClient)
+
 	app := httpapi.BuildApp(httpapi.RouterDeps{
 		Auth:      httpapi.NewAuthHandler(svc),
 		Pinger:    pool,
 		JWTSecret: cfg.JWTSecret,
+		Doc:       httpapi.NewDocHandler(docSvc),
+		Page:      httpapi.NewPageHandler(docSvc, ocrSvc, blobStore),
+		Template:  httpapi.NewTemplateHandler(tmplSvc),
+		Transform: httpapi.NewTransformHandler(xfSvc),
+		Output:    httpapi.NewOutputHandler(xfSvc),
+		Version:   httpapi.NewVersionHandler(cfg),
 	})
 
 	errCh := make(chan error, 1)

@@ -7,9 +7,15 @@ import (
 
 	"github.com/stretchr/testify/require"
 
+	"github.com/zulkhair/pustaka/backend/internal/adapter/ai"
+	"github.com/zulkhair/pustaka/backend/internal/adapter/blob"
 	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
 	"github.com/zulkhair/pustaka/backend/internal/adapter/mail"
 	"github.com/zulkhair/pustaka/backend/internal/app/auth"
+	"github.com/zulkhair/pustaka/backend/internal/app/document"
+	"github.com/zulkhair/pustaka/backend/internal/app/ocr"
+	"github.com/zulkhair/pustaka/backend/internal/app/template"
+	"github.com/zulkhair/pustaka/backend/internal/app/transform"
 	"github.com/zulkhair/pustaka/backend/internal/config"
 	"github.com/zulkhair/pustaka/backend/internal/testsupport"
 )
@@ -32,12 +38,20 @@ func newTestApp(t *testing.T) *testApp {
 		MaxAttempts:    5,
 		ResendCooldown: 60 * time.Second,
 	}
+	bs := blob.NewMemory()
+	aimock := ai.NewMock()
 	app := httpapi.BuildApp(httpapi.RouterDeps{
 		Auth:      httpapi.NewAuthHandler(auth.New(st, mailer, cfg)),
 		Pinger:    st.Pool(),
 		JWTSecret: cfg.JWTSecret,
+		Doc:       httpapi.NewDocHandler(document.New(st, bs)),
+		Page:      httpapi.NewPageHandler(document.New(st, bs), ocr.New(st, aimock, bs), bs),
+		Template:  httpapi.NewTemplateHandler(template.New(st)),
+		Transform: httpapi.NewTransformHandler(transform.New(st, aimock)),
+		Output:    httpapi.NewOutputHandler(transform.New(st, aimock)),
+		Version:   httpapi.NewVersionHandler(cfg),
 	})
-	return &testApp{app: app, store: st, mailer: mailer}
+	return &testApp{app: app, store: st, mailer: mailer, ai: aimock}
 }
 
 // TestRouter_FullApp_HealthAndMe exercises the fully wired app: open /health and

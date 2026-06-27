@@ -15,6 +15,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
+	"github.com/zulkhair/pustaka/backend/internal/adapter/ai"
 	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
 	"github.com/zulkhair/pustaka/backend/internal/adapter/mail"
 	"github.com/zulkhair/pustaka/backend/internal/adapter/store"
@@ -31,6 +32,7 @@ type testApp struct {
 	app    *fiber.App
 	store  *store.Store
 	mailer *mail.MockMailer
+	ai     *ai.Mock
 }
 
 // newAuthTestApp builds a LOCAL minimal Fiber app over a testcontainers-backed
