@@ -59,4 +59,11 @@ type Store interface {
 	CreateOutput(ctx context.Context, p CreateOutputParams) (Output, error)
 	GetOutput(ctx context.Context, id string) (Output, error)
 	ListOutputsByDocument(ctx context.Context, documentID string) ([]Output, error)
+
+	// Document sharing (Plan 3).
+	CreateShare(ctx context.Context, p CreateShareParams) (DocumentShare, error)
+	ListSharesForDocument(ctx context.Context, documentID string) ([]DocumentShare, error)
+	GetShare(ctx context.Context, documentID, userID string) (DocumentShare, error)
+	DeleteShare(ctx context.Context, documentID, userID string) error
+	ListDocumentsSharedWith(ctx context.Context, userID string) ([]Document, error)
 }
