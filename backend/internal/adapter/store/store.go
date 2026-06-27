@@ -24,6 +24,9 @@ func New(pool *pgxpool.Pool) *Store {
 	return &Store{pool: pool, q: sqlc.New(pool)}
 }
 
+// Pool returns the underlying pgx pool (used by the shared test harness).
+func (s *Store) Pool() *pgxpool.Pool { return s.pool }
+
 // withQueries builds a Store bound to an existing sqlc.Queries (used inside a tx).
 func (s *Store) withQueries(q *sqlc.Queries) *Store {
 	return &Store{pool: s.pool, q: q}
