@@ -8,6 +8,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/zulkhair/pustaka/backend/internal/app/document"
 	"github.com/zulkhair/pustaka/backend/internal/domain"
 )
 
@@ -16,10 +17,11 @@ const transformModel = "qwen2.5:14b-instruct"
 type Service struct {
 	store domain.Store
 	ai    domain.AIClient
+	authz document.Authorizer
 }
 
-func New(store domain.Store, ai domain.AIClient) *Service {
-	return &Service{store: store, ai: ai}
+func New(store domain.Store, ai domain.AIClient, authz document.Authorizer) *Service {
+	return &Service{store: store, ai: ai, authz: authz}
 }
 
 type pageEntry struct {
@@ -28,12 +30,8 @@ type pageEntry struct {
 }
 
 func (s *Service) Run(ctx context.Context, userID, docID, templateID string) (domain.Output, error) {
-	doc, err := s.store.GetDocument(ctx, docID)
-	if err != nil {
+	if _, err := s.authz.AuthorizeDoc(ctx, userID, docID, document.PermWrite); err != nil {
 		return domain.Output{}, err
-	}
-	if doc.UserID != userID {
-		return domain.Output{}, domain.ErrNotFound
 	}
 
 	tmpl, err := s.store.GetTemplate(ctx, templateID)
@@ -116,8 +114,10 @@ func (s *Service) GetOutput(ctx context.Context, userID, outputID string) (domai
 	if err != nil {
 		return domain.Output{}, err
 	}
-	if out.UserID != userID {
-		return domain.Output{}, domain.ErrNotFound
+	// Authorize against the output's parent document so a sharee may read it,
+	// identically to pages/OCR/images. A non-owner with no share gets ErrNotFound.
+	if _, err := s.authz.AuthorizeDoc(ctx, userID, out.DocumentID, document.PermRead); err != nil {
+		return domain.Output{}, err
 	}
 	return out, nil
 }

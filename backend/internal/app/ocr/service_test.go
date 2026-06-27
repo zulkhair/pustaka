@@ -9,6 +9,7 @@ import (
 
 	"github.com/zulkhair/pustaka/backend/internal/adapter/ai"
 	"github.com/zulkhair/pustaka/backend/internal/adapter/blob"
+	"github.com/zulkhair/pustaka/backend/internal/app/document"
 	"github.com/zulkhair/pustaka/backend/internal/app/ocr"
 	"github.com/zulkhair/pustaka/backend/internal/domain"
 	"github.com/zulkhair/pustaka/backend/internal/testsupport"
@@ -31,7 +32,7 @@ func TestRunStoresOCRResult(t *testing.T) {
 	defer cleanup()
 	mock := ai.NewMock()
 	mock.TranscribeFn = func([]byte) (string, error) { return "# transcribed", nil }
-	svc := ocr.New(st, mock, blob.NewMemory())
+	svc := ocr.New(st, mock, blob.NewMemory(), document.New(st, nil))
 	ctx := context.Background()
 	uid := mkUser(t, st)
 
@@ -57,7 +58,7 @@ func TestRerunReadsImageFromBlob(t *testing.T) {
 	mock := ai.NewMock()
 	calls := 0
 	mock.TranscribeFn = func([]byte) (string, error) { calls++; return "rerun-text", nil }
-	svc := ocr.New(st, mock, bs)
+	svc := ocr.New(st, mock, bs, document.New(st, nil))
 	ctx := context.Background()
 	uid := mkUser(t, st)
 
@@ -77,7 +78,7 @@ func TestRerunReadsImageFromBlob(t *testing.T) {
 func TestRerunOwnerScopedAndNoImage(t *testing.T) {
 	st, cleanup := testsupport.NewTestStore(t)
 	defer cleanup()
-	svc := ocr.New(st, ai.NewMock(), blob.NewMemory())
+	svc := ocr.New(st, ai.NewMock(), blob.NewMemory(), document.New(st, nil))
 	ctx := context.Background()
 	owner := mkUser(t, st)
 	other := mkUser(t, st)

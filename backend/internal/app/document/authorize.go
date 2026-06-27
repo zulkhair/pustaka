@@ -17,6 +17,18 @@ const (
 	PermWrite
 )
 
+// AuthorizeDoc is the exported form of authorizeDoc so sibling app services
+// (ocr, transform) enforce the SAME access rule without re-implementing it.
+func (s *Service) AuthorizeDoc(ctx context.Context, userID, docID string, perm Permission) (domain.Document, error) {
+	return s.authorizeDoc(ctx, userID, docID, perm)
+}
+
+// Authorizer is the access-control surface ocr/transform depend on (satisfied
+// by *document.Service).
+type Authorizer interface {
+	AuthorizeDoc(ctx context.Context, userID, docID string, perm Permission) (domain.Document, error)
+}
+
 // authorizeDoc is the single source of truth for document access control.
 // It loads the document and applies: read = owner OR active share; write = owner
 // only. It returns the loaded document so callers avoid a second fetch.

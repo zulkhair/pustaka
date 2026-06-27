@@ -9,6 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 
 	"github.com/zulkhair/pustaka/backend/internal/adapter/ai"
+	"github.com/zulkhair/pustaka/backend/internal/app/document"
 	"github.com/zulkhair/pustaka/backend/internal/app/transform"
 	"github.com/zulkhair/pustaka/backend/internal/domain"
 	"github.com/zulkhair/pustaka/backend/internal/testsupport"
@@ -46,7 +47,7 @@ func TestTransformDocumentScope(t *testing.T) {
 	defer cleanup()
 	mock := ai.NewMock()
 	mock.TransformFn = func(text string, tmpl domain.Template) (string, error) { return "# combined", nil }
-	svc := transform.New(st, mock)
+	svc := transform.New(st, mock, document.New(st, nil))
 	ctx := context.Background()
 	uid := mkUser(t, st)
 	docID := seedDocWithOCR(t, st, uid)
@@ -63,7 +64,7 @@ func TestTransformPageScope(t *testing.T) {
 	defer cleanup()
 	mock := ai.NewMock()
 	mock.TransformFn = func(text string, tmpl domain.Template) (string, error) { return `{"k":"v"}`, nil }
-	svc := transform.New(st, mock)
+	svc := transform.New(st, mock, document.New(st, nil))
 	ctx := context.Background()
 	uid := mkUser(t, st)
 	docID := seedDocWithOCR(t, st, uid)
@@ -83,7 +84,7 @@ func TestTransformPageScope(t *testing.T) {
 func TestTransformOwnerScoped(t *testing.T) {
 	st, cleanup := testsupport.NewTestStore(t)
 	defer cleanup()
-	svc := transform.New(st, ai.NewMock())
+	svc := transform.New(st, ai.NewMock(), document.New(st, nil))
 	ctx := context.Background()
 	owner := mkUser(t, st)
 	other := mkUser(t, st)
@@ -96,7 +97,7 @@ func TestTransformOwnerScoped(t *testing.T) {
 func TestTransformNoOCRFails(t *testing.T) {
 	st, cleanup := testsupport.NewTestStore(t)
 	defer cleanup()
-	svc := transform.New(st, ai.NewMock())
+	svc := transform.New(st, ai.NewMock(), document.New(st, nil))
 	ctx := context.Background()
 	uid := mkUser(t, st)
 	doc, err := st.CreateDocument(ctx, domain.CreateDocumentParams{ID: uuid.NewString(), UserID: uid, Title: "Empty", Mode: domain.ModePhoto})
@@ -109,7 +110,7 @@ func TestTransformNoOCRFails(t *testing.T) {
 func TestGetOutputOwnerScoped(t *testing.T) {
 	st, cleanup := testsupport.NewTestStore(t)
 	defer cleanup()
-	svc := transform.New(st, ai.NewMock())
+	svc := transform.New(st, ai.NewMock(), document.New(st, nil))
 	ctx := context.Background()
 	owner := mkUser(t, st)
 	other := mkUser(t, st)

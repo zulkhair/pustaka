@@ -61,9 +61,9 @@ func run() error {
 	blobStore := blob.New(cfg.BlobDir)
 	aiClient := ai.NewOllama(cfg)
 	docSvc := document.New(st, blobStore)
-	ocrSvc := ocr.New(st, aiClient, blobStore)
+	ocrSvc := ocr.New(st, aiClient, blobStore, docSvc)
 	tmplSvc := template.New(st)
-	xfSvc := transform.New(st, aiClient)
+	xfSvc := transform.New(st, aiClient, docSvc)
 
 	app := httpapi.BuildApp(httpapi.RouterDeps{
 		Auth:      httpapi.NewAuthHandler(svc),

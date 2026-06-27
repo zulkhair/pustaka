@@ -32,14 +32,16 @@ func TestMountDocumentRoutes(t *testing.T) {
 	aimock := ai.NewMock()
 
 	const secret = "router-secret"
+	docSvc := document.New(st, bs)
+	xfSvc := transform.New(st, aimock, docSvc)
 	app := httpapi.BuildApp(httpapi.RouterDeps{
 		JWTSecret: secret,
 		Pinger:    st.Pool(),
-		Doc:       httpapi.NewDocHandler(document.New(st, bs)),
-		Page:      httpapi.NewPageHandler(document.New(st, bs), ocr.New(st, aimock, bs), bs),
+		Doc:       httpapi.NewDocHandler(docSvc),
+		Page:      httpapi.NewPageHandler(docSvc, ocr.New(st, aimock, bs, docSvc), bs),
 		Template:  httpapi.NewTemplateHandler(template.New(st)),
-		Transform: httpapi.NewTransformHandler(transform.New(st, aimock)),
-		Output:    httpapi.NewOutputHandler(transform.New(st, aimock)),
+		Transform: httpapi.NewTransformHandler(xfSvc),
+		Output:    httpapi.NewOutputHandler(xfSvc),
 		Version:   httpapi.NewVersionHandler(configForRouter()),
 	})
 

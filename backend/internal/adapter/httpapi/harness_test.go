@@ -40,15 +40,17 @@ func newTestApp(t *testing.T) *testApp {
 	}
 	bs := blob.NewMemory()
 	aimock := ai.NewMock()
+	docSvc := document.New(st, bs)
+	xfSvc := transform.New(st, aimock, docSvc)
 	app := httpapi.BuildApp(httpapi.RouterDeps{
 		Auth:      httpapi.NewAuthHandler(auth.New(st, mailer, cfg)),
 		Pinger:    st.Pool(),
 		JWTSecret: cfg.JWTSecret,
-		Doc:       httpapi.NewDocHandler(document.New(st, bs)),
-		Page:      httpapi.NewPageHandler(document.New(st, bs), ocr.New(st, aimock, bs), bs),
+		Doc:       httpapi.NewDocHandler(docSvc),
+		Page:      httpapi.NewPageHandler(docSvc, ocr.New(st, aimock, bs, docSvc), bs),
 		Template:  httpapi.NewTemplateHandler(template.New(st)),
-		Transform: httpapi.NewTransformHandler(transform.New(st, aimock)),
-		Output:    httpapi.NewOutputHandler(transform.New(st, aimock)),
+		Transform: httpapi.NewTransformHandler(xfSvc),
+		Output:    httpapi.NewOutputHandler(xfSvc),
 		Version:   httpapi.NewVersionHandler(cfg),
 	})
 	return &testApp{app: app, store: st, mailer: mailer, ai: aimock}

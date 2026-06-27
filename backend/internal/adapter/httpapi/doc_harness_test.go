@@ -43,16 +43,17 @@ func newDocTestApp(t *testing.T) *docTestApp {
 
 	bs := blob.NewMemory()
 	aimock := ai.NewMock()
+	docSvc := document.New(st, bs)
 
 	return &docTestApp{
 		app:     fiber.New(),
 		store:   st,
 		blob:    bs,
 		ai:      aimock,
-		docSvc:  document.New(st, bs),
-		ocrSvc:  ocr.New(st, aimock, bs),
+		docSvc:  docSvc,
+		ocrSvc:  ocr.New(st, aimock, bs, docSvc),
 		tmplSvc: template.New(st),
-		xfSvc:   transform.New(st, aimock),
+		xfSvc:   transform.New(st, aimock, docSvc),
 	}
 }
 

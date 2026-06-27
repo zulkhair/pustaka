@@ -5,6 +5,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/zulkhair/pustaka/backend/internal/app/document"
 	"github.com/zulkhair/pustaka/backend/internal/domain"
 )
 
@@ -12,10 +13,11 @@ type Service struct {
 	store domain.Store
 	ai    domain.AIClient
 	blob  domain.BlobStore
+	authz document.Authorizer
 }
 
-func New(store domain.Store, ai domain.AIClient, blob domain.BlobStore) *Service {
-	return &Service{store: store, ai: ai, blob: blob}
+func New(store domain.Store, ai domain.AIClient, blob domain.BlobStore, authz document.Authorizer) *Service {
+	return &Service{store: store, ai: ai, blob: blob, authz: authz}
 }
 
 // Run transcribes the given page image and stores an ocr_result row. It
@@ -38,15 +40,11 @@ func (s *Service) Run(ctx context.Context, page domain.Page, imageBytes []byte) 
 	return res, nil
 }
 
-// Rerun re-OCRs a stored page image (owner-scoped). A page without a stored
-// image (text mode, or discarded) yields ErrNotFound.
+// Rerun re-OCRs a stored page image. Owner-only (write) via the shared
+// authorizer. A page without a stored image (text mode) yields ErrNotFound.
 func (s *Service) Rerun(ctx context.Context, userID, docID string, pageNumber int) (domain.OCRResult, error) {
-	doc, err := s.store.GetDocument(ctx, docID)
-	if err != nil {
+	if _, err := s.authz.AuthorizeDoc(ctx, userID, docID, document.PermWrite); err != nil {
 		return domain.OCRResult{}, err
-	}
-	if doc.UserID != userID {
-		return domain.OCRResult{}, domain.ErrNotFound
 	}
 	page, err := s.store.GetPageByNumber(ctx, docID, pageNumber)
 	if err != nil {
