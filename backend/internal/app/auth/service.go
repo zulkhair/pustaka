@@ -13,6 +13,7 @@ import (
 	"github.com/zulkhair/pustaka/backend/internal/config"
 	"github.com/zulkhair/pustaka/backend/internal/domain"
 	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
+	"github.com/zulkhair/pustaka/backend/internal/pkg/jwt"
 )
 
 type Service struct {
@@ -116,4 +117,101 @@ func (s *Service) Register(ctx context.Context, in RegisterInput) error {
 		return fmt.Errorf("send verification code: %w", err)
 	}
 	return nil
+}
+
+func (s *Service) issueTokens(ctx context.Context, u domain.User) (Tokens, error) {
+	access, err := jwt.GenerateAccess(u.ID, u.Role, s.cfg.JWTSecret, s.cfg.AccessTTL)
+	if err != nil {
+		return Tokens{}, fmt.Errorf("generate access token: %w", err)
+	}
+	refresh, err := jwt.GenerateRefreshToken()
+	if err != nil {
+		return Tokens{}, fmt.Errorf("generate refresh token: %w", err)
+	}
+	_, err = s.store.CreateSession(ctx, domain.CreateSessionParams{
+		ID:               uuid.NewString(),
+		UserID:           u.ID,
+		RefreshTokenHash: hash.HashRefreshToken(refresh),
+		ExpiresAt:        time.Now().Add(s.cfg.RefreshTTL),
+	})
+	if err != nil {
+		return Tokens{}, fmt.Errorf("create session: %w", err)
+	}
+	return Tokens{
+		AccessToken:  access,
+		RefreshToken: refresh,
+		ExpiresIn:    int(s.cfg.AccessTTL.Seconds()),
+	}, nil
+}
+
+func (s *Service) VerifyEmail(ctx context.Context, in VerifyInput) (Tokens, error) {
+	email := normalizeEmail(in.Email)
+
+	user, err := s.store.GetUserByEmail(ctx, email)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return Tokens{}, domain.ErrInvalidCode
+		}
+		return Tokens{}, err
+	}
+
+	ev, err := s.store.GetActiveEmailVerification(ctx, user.ID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return Tokens{}, domain.ErrInvalidCode
+		}
+		return Tokens{}, err
+	}
+
+	if time.Now().After(ev.ExpiresAt) {
+		return Tokens{}, domain.ErrCodeExpired
+	}
+
+	if !hash.CheckCode(ev.CodeHash, in.Code) {
+		// Atomic increment-then-compare: the UPDATE returns the new count.
+		attempts, incErr := s.store.IncrementVerificationAttempts(ctx, ev.ID)
+		if incErr != nil {
+			return Tokens{}, incErr
+		}
+		if attempts >= s.cfg.MaxAttempts {
+			return Tokens{}, domain.ErrTooManyAttempts
+		}
+		return Tokens{}, domain.ErrInvalidCode
+	}
+
+	var tokens Tokens
+	txErr := s.store.ExecTx(ctx, func(st domain.Store) error {
+		if err := st.SetUserEmailVerified(ctx, user.ID); err != nil {
+			return err
+		}
+		if err := st.ConsumeEmailVerification(ctx, ev.ID); err != nil {
+			return err
+		}
+		access, err := jwt.GenerateAccess(user.ID, user.Role, s.cfg.JWTSecret, s.cfg.AccessTTL)
+		if err != nil {
+			return fmt.Errorf("generate access token: %w", err)
+		}
+		refresh, err := jwt.GenerateRefreshToken()
+		if err != nil {
+			return fmt.Errorf("generate refresh token: %w", err)
+		}
+		if _, err := st.CreateSession(ctx, domain.CreateSessionParams{
+			ID:               uuid.NewString(),
+			UserID:           user.ID,
+			RefreshTokenHash: hash.HashRefreshToken(refresh),
+			ExpiresAt:        time.Now().Add(s.cfg.RefreshTTL),
+		}); err != nil {
+			return err
+		}
+		tokens = Tokens{
+			AccessToken:  access,
+			RefreshToken: refresh,
+			ExpiresIn:    int(s.cfg.AccessTTL.Seconds()),
+		}
+		return nil
+	})
+	if txErr != nil {
+		return Tokens{}, txErr
+	}
+	return tokens, nil
 }
