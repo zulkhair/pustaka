@@ -82,3 +82,30 @@ func (h *AuthHandler) ResendVerification(c *fiber.Ctx) error {
 	}
 	return OK(c, nil) // always the same generic 200 (no cooldown signal leaks)
 }
+
+type LoginReq struct {
+	Identifier string `json:"identifier"`
+	Password   string `json:"password"`
+}
+
+func (h *AuthHandler) Login(c *fiber.Ctx) error {
+	var req LoginReq
+	if err := c.BodyParser(&req); err != nil {
+		return Fail(c, fiber.StatusBadRequest, "invalid request body")
+	}
+	if req.Identifier == "" || req.Password == "" {
+		return Fail(c, fiber.StatusBadRequest, "identifier and password are required")
+	}
+	tok, err := h.svc.Login(c.Context(), auth.LoginInput{
+		Identifier: req.Identifier,
+		Password:   req.Password,
+	})
+	if err != nil {
+		return mapAuthError(c, err)
+	}
+	return OK(c, TokensDTO{
+		AccessToken:  tok.AccessToken,
+		RefreshToken: tok.RefreshToken,
+		ExpiresIn:    tok.ExpiresIn,
+	})
+}

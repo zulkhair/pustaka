@@ -271,3 +271,33 @@ func (s *Service) resendVerification(ctx context.Context, email string) error {
 
 	return s.mailer.SendVerificationCode(ctx, u.Email, code)
 }
+
+func (s *Service) Login(ctx context.Context, in LoginInput) (Tokens, error) {
+	var (
+		u   domain.User
+		err error
+	)
+	if strings.Contains(in.Identifier, "@") {
+		u, err = s.store.GetUserByEmail(ctx, normalizeEmail(in.Identifier))
+	} else {
+		u, err = s.store.GetUserByUsername(ctx, strings.TrimSpace(in.Identifier))
+	}
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return Tokens{}, domain.ErrInvalidCredentials // enumeration-safe
+		}
+		return Tokens{}, err
+	}
+
+	// Unknown identifier and wrong password both return ErrInvalidCredentials
+	// (enumeration-safe). The verified-status signal is only revealed after valid
+	// credentials, so it can't probe which emails exist.
+	if !hash.CheckPassword(u.PasswordHash, in.Password) {
+		return Tokens{}, domain.ErrInvalidCredentials
+	}
+	if !u.EmailVerified {
+		return Tokens{}, domain.ErrEmailNotVerified
+	}
+
+	return s.issueTokens(ctx, u)
+}
