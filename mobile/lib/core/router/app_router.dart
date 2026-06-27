@@ -14,15 +14,16 @@ import '../../features/transform/presentation/output_screen.dart';
 import '../../features/transform/presentation/transform_screen.dart';
 import '../auth/auth_controller.dart';
 import '../auth/auth_state.dart';
+import '../update/update_gate.dart';
 
-/// Wraps every authenticated route. The single mount point for [UpdateGate]
-/// (added in Task 22). For now a passthrough.
+/// Wraps every authenticated route. The single mount point for [UpdateGate] —
+/// the OTA prompt runs once, only when authenticated.
 class AppShell extends StatelessWidget {
   const AppShell({super.key, required this.child});
   final Widget child;
 
   @override
-  Widget build(BuildContext context) => child;
+  Widget build(BuildContext context) => UpdateGate(child: child);
 }
 
 final appRouterProvider = Provider<GoRouter>((ref) {
