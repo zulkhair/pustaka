@@ -365,3 +365,14 @@ func (s *Service) Refresh(ctx context.Context, refreshToken string) (Tokens, err
 		ExpiresIn:    int(s.cfg.AccessTTL.Seconds()),
 	}, nil
 }
+
+func (s *Service) Logout(ctx context.Context, refreshToken string) error {
+	sess, err := s.store.GetSessionByTokenHash(ctx, hash.HashRefreshToken(refreshToken))
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return nil // idempotent: unknown token is a successful no-op
+		}
+		return err
+	}
+	return s.store.RevokeSession(ctx, sess.ID)
+}

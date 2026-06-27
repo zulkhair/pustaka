@@ -59,7 +59,7 @@ func newAuthTestApp(t *testing.T) *testApp {
 	app.Post("/api/auth/resend-verification", h.ResendVerification)
 	app.Post("/api/auth/login", h.Login)
 	app.Post("/api/auth/refresh", h.Refresh)
-	// Task 17 appends its own mount line (logout) when implemented.
+	app.Post("/api/auth/logout", h.Logout)
 	return &testApp{app: app, store: st, mailer: mailer}
 }
 
