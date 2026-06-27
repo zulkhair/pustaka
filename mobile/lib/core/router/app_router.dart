@@ -2,6 +2,9 @@ import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 
+import '../../features/auth/presentation/login_screen.dart';
+import '../../features/auth/presentation/register_screen.dart';
+import '../../features/auth/presentation/verify_email_screen.dart';
 import '../auth/auth_controller.dart';
 import '../auth/auth_state.dart';
 
@@ -46,15 +49,15 @@ final appRouterProvider = Provider<GoRouter>((ref) {
       GoRoute(
           name: 'login',
           path: '/login',
-          builder: (c, s) => const _Stub('Login')),
+          builder: (c, s) => const LoginScreen()),
       GoRoute(
           name: 'register',
           path: '/register',
-          builder: (c, s) => const _Stub('Register')),
+          builder: (c, s) => const RegisterScreen()),
       GoRoute(
           name: 'verify',
           path: '/verify',
-          builder: (c, s) => const _Stub('Verify')),
+          builder: (c, s) => const VerifyEmailScreen()),
       ShellRoute(
         builder: (c, s, child) => AppShell(child: child),
         routes: [

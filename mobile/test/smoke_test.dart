@@ -3,6 +3,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pustaka/app.dart';
 import 'package:pustaka/core/auth/auth_controller.dart';
 
+import 'package:pustaka/features/auth/presentation/login_screen.dart';
 import 'support/fake_token_storage.dart';
 
 void main() {
@@ -14,6 +15,6 @@ void main() {
       ),
     );
     await tester.pumpAndSettle();
-    expect(find.text('Login'), findsWidgets);
+    expect(find.byType(LoginScreen), findsOneWidget);
   });
 }

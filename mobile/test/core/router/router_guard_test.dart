@@ -4,6 +4,8 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:pustaka/core/auth/auth_controller.dart';
 import 'package:pustaka/core/auth/auth_state.dart';
 import 'package:pustaka/core/router/app_router.dart';
+import 'package:pustaka/features/auth/presentation/login_screen.dart';
+import 'package:pustaka/features/auth/presentation/verify_email_screen.dart';
 
 class _FakeAuth extends AuthController {
   _FakeAuth(this._status);
@@ -29,12 +31,12 @@ Future<void> _pump(WidgetTester tester, AuthStatus status) async {
 void main() {
   testWidgets('unauthenticated redirects to /login', (tester) async {
     await _pump(tester, AuthStatus.unauthenticated);
-    expect(find.text('Login'), findsWidgets);
+    expect(find.byType(LoginScreen), findsOneWidget);
   });
 
   testWidgets('unverified redirects to /verify', (tester) async {
     await _pump(tester, AuthStatus.unverified);
-    expect(find.text('Verify'), findsWidgets);
+    expect(find.byType(VerifyEmailScreen), findsOneWidget);
   });
 
   testWidgets('authenticated stays on library', (tester) async {
