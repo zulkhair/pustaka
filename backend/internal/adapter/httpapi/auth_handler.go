@@ -109,3 +109,26 @@ func (h *AuthHandler) Login(c *fiber.Ctx) error {
 		ExpiresIn:    tok.ExpiresIn,
 	})
 }
+
+type RefreshReq struct {
+	RefreshToken string `json:"refreshToken"`
+}
+
+func (h *AuthHandler) Refresh(c *fiber.Ctx) error {
+	var req RefreshReq
+	if err := c.BodyParser(&req); err != nil {
+		return Fail(c, fiber.StatusBadRequest, "invalid request body")
+	}
+	if req.RefreshToken == "" {
+		return Fail(c, fiber.StatusBadRequest, "refreshToken is required")
+	}
+	tok, err := h.svc.Refresh(c.Context(), req.RefreshToken)
+	if err != nil {
+		return mapAuthError(c, err)
+	}
+	return OK(c, TokensDTO{
+		AccessToken:  tok.AccessToken,
+		RefreshToken: tok.RefreshToken,
+		ExpiresIn:    tok.ExpiresIn,
+	})
+}

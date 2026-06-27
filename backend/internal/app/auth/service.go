@@ -301,3 +301,67 @@ func (s *Service) Login(ctx context.Context, in LoginInput) (Tokens, error) {
 
 	return s.issueTokens(ctx, u)
 }
+
+func (s *Service) Refresh(ctx context.Context, refreshToken string) (Tokens, error) {
+	tokenHash := hash.HashRefreshToken(refreshToken)
+
+	sess, err := s.store.GetSessionByTokenHash(ctx, tokenHash)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return Tokens{}, domain.ErrUnauthorized
+		}
+		return Tokens{}, err
+	}
+
+	// Reuse of a revoked token is treated as theft: revoke ALL of the user's
+	// sessions (including the live rotated one) before rejecting.
+	if sess.RevokedAt != nil {
+		if revErr := s.store.RevokeAllUserSessions(ctx, sess.UserID); revErr != nil {
+			return Tokens{}, revErr
+		}
+		return Tokens{}, domain.ErrUnauthorized
+	}
+	if time.Now().After(sess.ExpiresAt) {
+		return Tokens{}, domain.ErrUnauthorized
+	}
+
+	u, err := s.store.GetUserByID(ctx, sess.UserID)
+	if err != nil {
+		if errors.Is(err, domain.ErrNotFound) {
+			return Tokens{}, domain.ErrUnauthorized
+		}
+		return Tokens{}, err
+	}
+
+	access, err := jwt.GenerateAccess(u.ID, u.Role, s.cfg.JWTSecret, s.cfg.AccessTTL)
+	if err != nil {
+		return Tokens{}, err
+	}
+	refresh, err := jwt.GenerateRefreshToken()
+	if err != nil {
+		return Tokens{}, err
+	}
+
+	// Token generation happens before the tx so a CSPRNG/JWT error never leaves a
+	// revoked-but-unreplaced session.
+	if err := s.store.ExecTx(ctx, func(tx domain.Store) error {
+		if err := tx.RevokeSession(ctx, sess.ID); err != nil {
+			return err
+		}
+		_, err := tx.CreateSession(ctx, domain.CreateSessionParams{
+			ID:               uuid.NewString(),
+			UserID:           u.ID,
+			RefreshTokenHash: hash.HashRefreshToken(refresh),
+			ExpiresAt:        time.Now().Add(s.cfg.RefreshTTL),
+		})
+		return err
+	}); err != nil {
+		return Tokens{}, err
+	}
+
+	return Tokens{
+		AccessToken:  access,
+		RefreshToken: refresh,
+		ExpiresIn:    int(s.cfg.AccessTTL.Seconds()),
+	}, nil
+}
