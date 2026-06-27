@@ -1,4 +1,4 @@
-name: backend-ci
+name: ci
 
 on:
   push:
@@ -51,3 +51,26 @@ jobs:
       # on ubuntu runners. The real-LLM path (OLLAMA_REAL=1) is not run in CI.
       - name: Integration test
         run: go test -tags=integration ./test/integration/... -count=1
+
+  mobile:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: mobile
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.27.4'
+          channel: stable
+
+      - name: Get packages
+        run: flutter pub get
+
+      - name: Analyze
+        run: flutter analyze
+
+      - name: Test
+        run: flutter test
