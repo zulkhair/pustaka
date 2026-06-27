@@ -12,10 +12,6 @@ infrastructure.
 - **Security first:** short-lived JWT access tokens + rotating refresh tokens, bcrypt, and a single
   centralized authorization rule (read = owner *or* active share; write = owner only).
 
-> **Status:** Backend (auth, documents/OCR/transform, sharing) and the Flutter mobile app are
-> feature-complete and tested. Not yet deployed; intended for self-hosting behind a TLS-terminating
-> reverse proxy (e.g. Caddy or Nginx).
-
 ---
 
 ## Table of contents
