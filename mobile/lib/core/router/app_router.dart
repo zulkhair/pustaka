@@ -9,6 +9,8 @@ import '../../features/capture/presentation/capture_screen.dart';
 import '../../features/library/presentation/library_screen.dart';
 import '../../features/reader/presentation/reader_screen.dart';
 import '../../features/templates/presentation/templates_screen.dart';
+import '../../features/transform/presentation/output_screen.dart';
+import '../../features/transform/presentation/transform_screen.dart';
 import '../auth/auth_controller.dart';
 import '../auth/auth_state.dart';
 
@@ -80,12 +82,13 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
             name: 'transform',
             path: '/doc/:id/transform',
-            builder: (c, s) => const _Stub('Transform'),
+            builder: (c, s) => TransformScreen(docId: s.pathParameters['id']!),
           ),
           GoRoute(
               name: 'output',
               path: '/output/:id',
-              builder: (c, s) => const _Stub('Output')),
+              builder: (c, s) =>
+                  OutputScreen(outputId: s.pathParameters['id']!)),
           GoRoute(
               name: 'templates',
               path: '/templates',
