@@ -18,6 +18,14 @@ type Document struct {
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 }
 
+type DocumentShare struct {
+	ID               string             `json:"id"`
+	DocumentID       string             `json:"document_id"`
+	SharedWithUserID string             `json:"shared_with_user_id"`
+	Permission       string             `json:"permission"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
+}
+
 type EmailVerification struct {
 	ID         string             `json:"id"`
 	UserID     string             `json:"user_id"`
