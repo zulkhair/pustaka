@@ -34,7 +34,7 @@ import (
 	"github.com/zulkhair/pustaka/backend/internal/pkg/hash"
 )
 
-const defaultRealOllamaHost = "http://100.65.255.51:11434"
+const defaultRealOllamaHost = "http://localhost:11434"
 
 // fixed bodies the fake Ollama returns, so mock-mode assertions are exact.
 const (

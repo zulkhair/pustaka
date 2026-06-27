@@ -13,7 +13,7 @@ class ApiConfig {
 
   /// Production/dev server (Caddy-fronted). Not yet deployed at time of writing.
   const ApiConfig.dev()
-      : baseUrl = 'https://pustaka.dev.etracrown.web.id/api',
+      : baseUrl = 'https://pustaka.example.com/api',
         connectTimeout = const Duration(seconds: 15),
         receiveTimeout = const Duration(seconds: 60);
 
