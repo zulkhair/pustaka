@@ -10,6 +10,9 @@ help: ## Show run notes and available targets
 run:
 	go run ./cmd/server
 
+seed:
+	go run ./cmd/seed
+
 test:
 	go test ./...
 
