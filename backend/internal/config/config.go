@@ -20,6 +20,12 @@ type Config struct {
 	CodeTTL        time.Duration
 	MaxAttempts    int
 	ResendCooldown time.Duration
+	BlobDir        string
+	OllamaHost     string
+	OCRModel       string
+	TransformModel string
+	AppVersion     string
+	APKPath        string
 }
 
 func Load() (Config, error) {
@@ -60,6 +66,13 @@ func Load() (Config, error) {
 	if cfg.MaxAttempts, err = intDefault("VERIFICATION_MAX_ATTEMPTS", 5); err != nil {
 		return Config{}, err
 	}
+
+	cfg.BlobDir = os.Getenv("BLOB_DIR")
+	cfg.OllamaHost = os.Getenv("OLLAMA_HOST")
+	cfg.APKPath = os.Getenv("APK_PATH")
+	cfg.OCRModel = getDefault("OCR_MODEL", "glm-ocr")
+	cfg.TransformModel = getDefault("TRANSFORM_MODEL", "qwen2.5:14b-instruct")
+	cfg.AppVersion = getDefault("APP_VERSION", "0.0.0")
 
 	return cfg, nil
 }

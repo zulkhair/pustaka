@@ -51,6 +51,36 @@ func TestLoadOverrides(t *testing.T) {
 	require.Equal(t, 30*time.Second, cfg.ResendCooldown)
 }
 
+func TestLoadDocumentDefaults(t *testing.T) {
+	setRequired(t)
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "glm-ocr", cfg.OCRModel)
+	require.Equal(t, "qwen2.5:14b-instruct", cfg.TransformModel)
+	require.Equal(t, "0.0.0", cfg.AppVersion)
+	require.Equal(t, "", cfg.BlobDir)
+	require.Equal(t, "", cfg.OllamaHost)
+	require.Equal(t, "", cfg.APKPath)
+}
+
+func TestLoadDocumentOverrides(t *testing.T) {
+	setRequired(t)
+	t.Setenv("BLOB_DIR", "/data/blobs")
+	t.Setenv("OLLAMA_HOST", "http://100.65.255.51:11434")
+	t.Setenv("OCR_MODEL", "glm-ocr:latest")
+	t.Setenv("TRANSFORM_MODEL", "qwen2.5:7b")
+	t.Setenv("APP_VERSION", "1.2.3")
+	t.Setenv("APK_PATH", "/srv/pustaka.apk")
+	cfg, err := Load()
+	require.NoError(t, err)
+	require.Equal(t, "/data/blobs", cfg.BlobDir)
+	require.Equal(t, "http://100.65.255.51:11434", cfg.OllamaHost)
+	require.Equal(t, "glm-ocr:latest", cfg.OCRModel)
+	require.Equal(t, "qwen2.5:7b", cfg.TransformModel)
+	require.Equal(t, "1.2.3", cfg.AppVersion)
+	require.Equal(t, "/srv/pustaka.apk", cfg.APKPath)
+}
+
 func TestLoadMissingRequired(t *testing.T) {
 	t.Setenv("DATABASE_URL", "")
 	t.Setenv("JWT_SECRET", "")
