@@ -20,7 +20,7 @@ type AddPageResult struct {
 }
 
 func (s *Service) AddPage(ctx context.Context, userID, docID string, imageBytes []byte, ocrRunner OCRRunner) (AddPageResult, error) {
-	doc, err := s.ownedDocument(ctx, userID, docID)
+	doc, err := s.authorizeDoc(ctx, userID, docID, PermWrite)
 	if err != nil {
 		return AddPageResult{}, err
 	}

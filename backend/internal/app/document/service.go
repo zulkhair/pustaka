@@ -48,22 +48,8 @@ func (s *Service) List(ctx context.Context, userID string) ([]domain.Document, e
 	return s.store.ListDocumentsByUser(ctx, userID)
 }
 
-// ownedDocument fetches a document only if it belongs to userID. A missing or
-// foreign document yields ErrNotFound (no existence leak). Plan 3 replaces this
-// with a shared authorizeDoc that also honors document_share.
-func (s *Service) ownedDocument(ctx context.Context, userID, docID string) (domain.Document, error) {
-	doc, err := s.store.GetDocument(ctx, docID)
-	if err != nil {
-		return domain.Document{}, err // already ErrNotFound on miss
-	}
-	if doc.UserID != userID {
-		return domain.Document{}, domain.ErrNotFound
-	}
-	return doc, nil
-}
-
 func (s *Service) Get(ctx context.Context, userID, docID string) (DocumentDetail, error) {
-	doc, err := s.ownedDocument(ctx, userID, docID)
+	doc, err := s.authorizeDoc(ctx, userID, docID, PermRead)
 	if err != nil {
 		return DocumentDetail{}, err
 	}
