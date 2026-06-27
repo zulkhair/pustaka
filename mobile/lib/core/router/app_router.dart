@@ -8,6 +8,7 @@ import '../../features/auth/presentation/verify_email_screen.dart';
 import '../../features/capture/presentation/capture_screen.dart';
 import '../../features/library/presentation/library_screen.dart';
 import '../../features/reader/presentation/reader_screen.dart';
+import '../../features/templates/presentation/templates_screen.dart';
 import '../auth/auth_controller.dart';
 import '../auth/auth_state.dart';
 
@@ -88,7 +89,7 @@ final appRouterProvider = Provider<GoRouter>((ref) {
           GoRoute(
               name: 'templates',
               path: '/templates',
-              builder: (c, s) => const _Stub('Templates')),
+              builder: (c, s) => const TemplatesScreen()),
           GoRoute(
               name: 'share',
               path: '/doc/:id/share',
