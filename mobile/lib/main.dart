@@ -1,8 +1,9 @@
+import 'package:flutter/widgets.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 
 import 'app.dart';
-import 'package:flutter/widgets.dart';
+import 'core/di/providers.dart';
 
 void main() {
-  runApp(const ProviderScope(child: PustakaApp()));
+  runApp(ProviderScope(overrides: rootOverrides, child: const PustakaApp()));
 }
