@@ -37,12 +37,12 @@ class _ReaderScreenState extends ConsumerState<ReaderScreen> {
               IconButton(
                 tooltip: 'Transform',
                 icon: const Icon(Icons.auto_awesome),
-                onPressed: () => context.go('/doc/${widget.docId}/transform'),
+                onPressed: () => context.push('/doc/${widget.docId}/transform'),
               ),
               IconButton(
                 tooltip: 'Share',
                 icon: const Icon(Icons.share),
-                onPressed: () => context.go('/doc/${widget.docId}/share'),
+                onPressed: () => context.push('/doc/${widget.docId}/share'),
               ),
             ],
           ],

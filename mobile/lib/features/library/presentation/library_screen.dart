@@ -82,7 +82,7 @@ class _Grid extends StatelessWidget {
           (context, i) {
             final d = docs[i];
             return DocumentCard(
-                doc: d, onTap: () => context.go('/doc/${d.id}'));
+                doc: d, onTap: () => context.push('/doc/${d.id}'));
           },
           childCount: docs.length,
         ),

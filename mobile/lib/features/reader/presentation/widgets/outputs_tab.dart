@@ -21,7 +21,7 @@ class OutputsTab extends StatelessWidget {
           leading: const Icon(Icons.description_outlined),
           title: Text('Output ${o.id.substring(0, o.id.length.clamp(0, 8))}'),
           subtitle: Text('${o.status.name} · ${o.model}'),
-          onTap: () => context.go('/output/${o.id}'),
+          onTap: () => context.push('/output/${o.id}'),
         );
       },
     );
