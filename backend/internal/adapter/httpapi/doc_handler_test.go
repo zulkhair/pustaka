@@ -1,9 +1,11 @@
 package httpapi_test
 
 import (
+	"context"
 	"net/http"
 	"testing"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 
 	"github.com/zulkhair/pustaka/backend/internal/adapter/httpapi"
@@ -18,6 +20,7 @@ func mountDocRoutes(ta *docTestApp, uid string) {
 	g.Get("/documents", h.List)
 	g.Get("/documents/:id", h.Get)
 	g.Patch("/documents/:id", h.Rename)
+	g.Patch("/documents/:id/thumbnail", h.SetThumbnail)
 	g.Delete("/documents/:id", h.Delete)
 }
 
@@ -47,6 +50,40 @@ func TestDocRenameAndDelete(t *testing.T) {
 	require.Equal(t, http.StatusOK, code)
 	code, _ = getJSON(t, ta, "/api/documents/"+created.ID)
 	require.Equal(t, http.StatusNotFound, code)
+}
+
+func TestDocSetThumbnail(t *testing.T) {
+	ta := newDocTestApp(t)
+	uid := seedDocUser(t, ta)
+	mountDocRoutes(ta, uid)
+
+	code, env := postJSON(t, ta, "/api/documents", map[string]string{"title": "Doc", "mode": "photo"})
+	require.Equal(t, http.StatusOK, code)
+	var created struct {
+		ID string `json:"id"`
+	}
+	decodeData(t, env, &created)
+
+	// give it a page-2 with a thumbnail
+	thumb := "blob/p2_thumb.jpg"
+	_, err := ta.store.CreatePage(context.Background(), domain.CreatePageParams{
+		ID: uuid.NewString(), DocumentID: created.ID, PageNumber: 2,
+		ImagePath: &thumb, ThumbPath: &thumb, Status: domain.StatusDone,
+	})
+	require.NoError(t, err)
+
+	// set cover to page 2
+	code, env = patchJSON(t, ta, "/api/documents/"+created.ID+"/thumbnail", map[string]int{"page": 2})
+	require.Equal(t, http.StatusOK, code)
+	var updated struct {
+		ThumbPage int `json:"thumbPage"`
+	}
+	decodeData(t, env, &updated)
+	require.Equal(t, 2, updated.ThumbPage)
+
+	// invalid page -> 400
+	code, _ = patchJSON(t, ta, "/api/documents/"+created.ID+"/thumbnail", map[string]int{"page": 99})
+	require.Equal(t, http.StatusBadRequest, code)
 }
 
 func TestDocCreateAndGet(t *testing.T) {

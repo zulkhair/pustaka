@@ -1,0 +1,1 @@
+ALTER TABLE document ADD COLUMN thumb_page INT NOT NULL DEFAULT 1;

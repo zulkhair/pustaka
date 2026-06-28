@@ -15,6 +15,7 @@ func toDocument(r sqlc.Document) domain.Document {
 		Mode:      r.Mode,
 		Status:    r.Status,
 		PageCount: int(r.PageCount),
+		ThumbPage: int(r.ThumbPage),
 		CreatedAt: r.CreatedAt.Time,
 	}
 }
@@ -115,6 +116,14 @@ func (s *Store) IncrementDocumentPageCount(ctx context.Context, id string) (int,
 
 func (s *Store) UpdateDocumentTitle(ctx context.Context, id, title string) (domain.Document, error) {
 	r, err := s.q.UpdateDocumentTitle(ctx, sqlc.UpdateDocumentTitleParams{ID: id, Title: title})
+	if err != nil {
+		return domain.Document{}, mapErr(err)
+	}
+	return toDocument(r), nil
+}
+
+func (s *Store) SetDocumentThumbPage(ctx context.Context, id string, page int) (domain.Document, error) {
+	r, err := s.q.SetDocumentThumbPage(ctx, sqlc.SetDocumentThumbPageParams{ID: id, ThumbPage: int32(page)})
 	if err != nil {
 		return domain.Document{}, mapErr(err)
 	}

@@ -21,6 +21,7 @@ type Document struct {
 	Mode      string
 	Status    string
 	PageCount int
+	ThumbPage int
 	CreatedAt time.Time
 }
 

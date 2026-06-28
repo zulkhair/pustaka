@@ -26,6 +26,7 @@ type docDTO struct {
 	Mode      string `json:"mode"`
 	Status    string `json:"status"`
 	PageCount int    `json:"pageCount"`
+	ThumbPage int    `json:"thumbPage"`
 	CreatedAt string `json:"createdAt"`
 	ThumbURL  string `json:"thumbUrl,omitempty"`
 }
@@ -45,7 +46,8 @@ func (h *DocHandler) Create(c *fiber.Ctx) error {
 	}
 	return OK(c, docDTO{
 		ID: doc.ID, Title: doc.Title, Mode: doc.Mode, Status: doc.Status,
-		PageCount: doc.PageCount, CreatedAt: doc.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		PageCount: doc.PageCount, ThumbPage: doc.ThumbPage,
+		CreatedAt: doc.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	})
 }
 
@@ -70,10 +72,15 @@ func toDocDTOs(docs []domain.Document) []docDTO {
 	for _, d := range docs {
 		dto := docDTO{
 			ID: d.ID, Title: d.Title, Mode: d.Mode, Status: d.Status,
-			PageCount: d.PageCount, CreatedAt: d.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			PageCount: d.PageCount, ThumbPage: d.ThumbPage,
+			CreatedAt: d.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		}
 		if d.PageCount > 0 && d.Mode == "photo" {
-			dto.ThumbURL = fmt.Sprintf("/api/documents/%s/pages/1/thumb", d.ID)
+			page := d.ThumbPage
+			if page < 1 || page > d.PageCount {
+				page = 1 // fall back if the cover points past the current pages
+			}
+			dto.ThumbURL = fmt.Sprintf("/api/documents/%s/pages/%d/thumb", d.ID, page)
 		}
 		out = append(out, dto)
 	}
@@ -99,7 +106,32 @@ func (h *DocHandler) Rename(c *fiber.Ctx) error {
 	}
 	return OK(c, docDTO{
 		ID: doc.ID, Title: doc.Title, Mode: doc.Mode, Status: doc.Status,
-		PageCount: doc.PageCount, CreatedAt: doc.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+		PageCount: doc.PageCount, ThumbPage: doc.ThumbPage,
+		CreatedAt: doc.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	})
+}
+
+type setThumbnailReq struct {
+	Page int `json:"page"`
+}
+
+func (h *DocHandler) SetThumbnail(c *fiber.Ctx) error {
+	uid, ok := localUserID(c)
+	if !ok {
+		return Fail(c, fiber.StatusUnauthorized, "unauthorized")
+	}
+	var req setThumbnailReq
+	if err := c.BodyParser(&req); err != nil {
+		return Fail(c, fiber.StatusBadRequest, "invalid body")
+	}
+	doc, err := h.svc.SetThumbnail(c.Context(), uid, c.Params("id"), req.Page)
+	if err != nil {
+		return mapDocError(c, err)
+	}
+	return OK(c, docDTO{
+		ID: doc.ID, Title: doc.Title, Mode: doc.Mode, Status: doc.Status,
+		PageCount: doc.PageCount, ThumbPage: doc.ThumbPage,
+		CreatedAt: doc.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 	})
 }
 
@@ -150,7 +182,8 @@ func (h *DocHandler) Get(c *fiber.Ctx) error {
 	dto := docDetailDTO{
 		Document: docDTO{
 			ID: d.ID, Title: d.Title, Mode: d.Mode, Status: d.Status,
-			PageCount: d.PageCount, CreatedAt: d.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+			PageCount: d.PageCount, ThumbPage: d.ThumbPage,
+			CreatedAt: d.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
 		},
 		Pages:   make([]pageDTO, 0, len(detail.Pages)),
 		Outputs: make([]outputDTO, 0, len(detail.Outputs)),

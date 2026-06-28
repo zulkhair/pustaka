@@ -38,3 +38,24 @@ func TestDocumentRenameAndSoftDelete(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, list)
 }
+
+func TestSetDocumentThumbPage(t *testing.T) {
+	st, cleanup := testsupport.NewTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	uid := seedUser(t, st)
+
+	doc, err := st.CreateDocument(ctx, domain.CreateDocumentParams{
+		ID: uuid.NewString(), UserID: uid, Title: "Doc", Mode: domain.ModePhoto,
+	})
+	require.NoError(t, err)
+	require.Equal(t, 1, doc.ThumbPage) // defaults to first page
+
+	updated, err := st.SetDocumentThumbPage(ctx, doc.ID, 3)
+	require.NoError(t, err)
+	require.Equal(t, 3, updated.ThumbPage)
+
+	got, err := st.GetDocument(ctx, doc.ID)
+	require.NoError(t, err)
+	require.Equal(t, 3, got.ThumbPage)
+}

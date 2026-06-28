@@ -17,6 +17,7 @@ type Document struct {
 	Status    string             `json:"status"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
+	ThumbPage int32              `json:"thumb_page"`
 }
 
 type DocumentShare struct {

@@ -1,15 +1,15 @@
 -- name: CreateDocument :one
 INSERT INTO document (id, user_id, title, mode)
 VALUES ($1, $2, $3, $4)
-RETURNING id, user_id, title, mode, page_count, status, created_at, deleted_at;
+RETURNING id, user_id, title, mode, page_count, status, created_at, deleted_at, thumb_page;
 
 -- name: GetDocument :one
-SELECT id, user_id, title, mode, page_count, status, created_at, deleted_at
+SELECT id, user_id, title, mode, page_count, status, created_at, deleted_at, thumb_page
 FROM document
 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: ListDocumentsByUser :many
-SELECT id, user_id, title, mode, page_count, status, created_at, deleted_at
+SELECT id, user_id, title, mode, page_count, status, created_at, deleted_at, thumb_page
 FROM document
 WHERE user_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC;
@@ -22,7 +22,11 @@ UPDATE document SET page_count = page_count + 1 WHERE id = $1 RETURNING page_cou
 
 -- name: UpdateDocumentTitle :one
 UPDATE document SET title = $2 WHERE id = $1
-RETURNING id, user_id, title, mode, page_count, status, created_at, deleted_at;
+RETURNING id, user_id, title, mode, page_count, status, created_at, deleted_at, thumb_page;
+
+-- name: SetDocumentThumbPage :one
+UPDATE document SET thumb_page = $2 WHERE id = $1
+RETURNING id, user_id, title, mode, page_count, status, created_at, deleted_at, thumb_page;
 
 -- name: SoftDeleteDocument :exec
 UPDATE document SET deleted_at = now() WHERE id = $1;

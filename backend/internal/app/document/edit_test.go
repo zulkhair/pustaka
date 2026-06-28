@@ -50,3 +50,53 @@ func TestRenameAndDeleteAuthz(t *testing.T) {
 	_, err = svc.Get(ctx, owner, doc.ID)
 	require.ErrorIs(t, err, domain.ErrNotFound)
 }
+
+func TestSetThumbnailAuthzAndValidation(t *testing.T) {
+	st, cleanup := testsupport.NewTestStore(t)
+	defer cleanup()
+	ctx := context.Background()
+	svc := document.New(st, nil)
+
+	owner := newUser(t, st)
+	sharee := newUser(t, st)
+	stranger := newUser(t, st)
+
+	doc, err := st.CreateDocument(ctx, domain.CreateDocumentParams{
+		ID: uuid.NewString(), UserID: owner, Title: "Doc", Mode: domain.ModePhoto,
+	})
+	require.NoError(t, err)
+	_, err = st.CreateShare(ctx, domain.CreateShareParams{
+		ID: uuid.NewString(), DocumentID: doc.ID, SharedWithUserID: sharee, Permission: domain.PermissionViewer,
+	})
+	require.NoError(t, err)
+
+	thumb := "blob/thumb.jpg"
+	// page 1 has an image+thumb; page 2 has neither (e.g. failed capture)
+	_, err = st.CreatePage(ctx, domain.CreatePageParams{
+		ID: uuid.NewString(), DocumentID: doc.ID, PageNumber: 1,
+		ImagePath: &thumb, ThumbPath: &thumb, Status: domain.StatusDone,
+	})
+	require.NoError(t, err)
+	_, err = st.CreatePage(ctx, domain.CreatePageParams{
+		ID: uuid.NewString(), DocumentID: doc.ID, PageNumber: 2, Status: domain.StatusFailed,
+	})
+	require.NoError(t, err)
+
+	// owner sets a valid page
+	d, err := svc.SetThumbnail(ctx, owner, doc.ID, 1)
+	require.NoError(t, err)
+	require.Equal(t, 1, d.ThumbPage)
+
+	// non-existent page -> validation
+	_, err = svc.SetThumbnail(ctx, owner, doc.ID, 99)
+	require.ErrorIs(t, err, domain.ErrValidation)
+	// page without a thumbnail -> validation
+	_, err = svc.SetThumbnail(ctx, owner, doc.ID, 2)
+	require.ErrorIs(t, err, domain.ErrValidation)
+	// sharee (read-only) -> forbidden
+	_, err = svc.SetThumbnail(ctx, sharee, doc.ID, 1)
+	require.ErrorIs(t, err, domain.ErrForbidden)
+	// stranger -> not found
+	_, err = svc.SetThumbnail(ctx, stranger, doc.ID, 1)
+	require.ErrorIs(t, err, domain.ErrNotFound)
+}

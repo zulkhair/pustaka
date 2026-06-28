@@ -44,6 +44,7 @@ type Store interface {
 	SetDocumentStatus(ctx context.Context, id, status string) error
 	IncrementDocumentPageCount(ctx context.Context, id string) (int, error)
 	UpdateDocumentTitle(ctx context.Context, id, title string) (Document, error)
+	SetDocumentThumbPage(ctx context.Context, id string, page int) (Document, error)
 	SoftDeleteDocument(ctx context.Context, id string) error
 
 	CreatePage(ctx context.Context, p CreatePageParams) (Page, error)
