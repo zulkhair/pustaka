@@ -29,7 +29,7 @@ class ApiConfig {
   ///  - else the default dev config.
   factory ApiConfig.fromEnvironment() {
     const override = String.fromEnvironment('API_BASE_URL');
-    if (override.isNotEmpty) return ApiConfig(baseUrl: override);
+    if (override.isNotEmpty) return const ApiConfig(baseUrl: override);
     const useLocal = bool.fromEnvironment('USE_LOCAL');
     return useLocal ? const ApiConfig.local() : const ApiConfig.dev();
   }
