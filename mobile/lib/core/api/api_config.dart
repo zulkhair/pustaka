@@ -23,8 +23,13 @@ class ApiConfig {
         connectTimeout = const Duration(seconds: 15),
         receiveTimeout = const Duration(seconds: 60);
 
-  /// Default config: dev unless built with `--dart-define=USE_LOCAL=true`.
+  /// Resolves config at build time:
+  ///  - `--dart-define=API_BASE_URL=https://host/api` overrides everything;
+  ///  - else `--dart-define=USE_LOCAL=true` targets the local backend;
+  ///  - else the default dev config.
   factory ApiConfig.fromEnvironment() {
+    const override = String.fromEnvironment('API_BASE_URL');
+    if (override.isNotEmpty) return ApiConfig(baseUrl: override);
     const useLocal = bool.fromEnvironment('USE_LOCAL');
     return useLocal ? const ApiConfig.local() : const ApiConfig.dev();
   }
