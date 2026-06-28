@@ -43,6 +43,8 @@ type Store interface {
 	ListDocumentsByUser(ctx context.Context, userID string) ([]Document, error)
 	SetDocumentStatus(ctx context.Context, id, status string) error
 	IncrementDocumentPageCount(ctx context.Context, id string) (int, error)
+	UpdateDocumentTitle(ctx context.Context, id, title string) (Document, error)
+	SoftDeleteDocument(ctx context.Context, id string) error
 
 	CreatePage(ctx context.Context, p CreatePageParams) (Page, error)
 	GetPageByNumber(ctx context.Context, documentID string, pageNumber int) (Page, error)

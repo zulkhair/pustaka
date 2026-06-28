@@ -17,6 +17,36 @@ func mountDocRoutes(ta *docTestApp, uid string) {
 	g.Post("/documents", h.Create)
 	g.Get("/documents", h.List)
 	g.Get("/documents/:id", h.Get)
+	g.Patch("/documents/:id", h.Rename)
+	g.Delete("/documents/:id", h.Delete)
+}
+
+func TestDocRenameAndDelete(t *testing.T) {
+	ta := newDocTestApp(t)
+	uid := seedDocUser(t, ta)
+	mountDocRoutes(ta, uid)
+
+	code, env := postJSON(t, ta, "/api/documents", map[string]string{"title": "Old", "mode": "text"})
+	require.Equal(t, http.StatusOK, code)
+	var created struct {
+		ID string `json:"id"`
+	}
+	decodeData(t, env, &created)
+
+	// rename
+	code, env = patchJSON(t, ta, "/api/documents/"+created.ID, map[string]string{"title": "New"})
+	require.Equal(t, http.StatusOK, code)
+	var renamed struct {
+		Title string `json:"title"`
+	}
+	decodeData(t, env, &renamed)
+	require.Equal(t, "New", renamed.Title)
+
+	// delete -> subsequent get is 404
+	code, _ = deleteJSON(t, ta, "/api/documents/"+created.ID)
+	require.Equal(t, http.StatusOK, code)
+	code, _ = getJSON(t, ta, "/api/documents/"+created.ID)
+	require.Equal(t, http.StatusNotFound, code)
 }
 
 func TestDocCreateAndGet(t *testing.T) {

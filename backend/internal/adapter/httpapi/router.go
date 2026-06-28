@@ -55,6 +55,8 @@ func Mount(app *fiber.App, deps RouterDeps) {
 	docs.Post("/", deps.Doc.Create)
 	docs.Get("/", deps.Doc.List)
 	docs.Get("/:id", deps.Doc.Get)
+	docs.Patch("/:id", deps.Doc.Rename)
+	docs.Delete("/:id", deps.Doc.Delete)
 	docs.Post("/:id/pages", deps.Page.AddPage)
 	docs.Get("/:id/pages/:n/image", deps.Page.Image)
 	docs.Get("/:id/pages/:n/thumb", deps.Page.Thumb)

@@ -16,6 +16,7 @@ type Document struct {
 	PageCount int32              `json:"page_count"`
 	Status    string             `json:"status"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	DeletedAt pgtype.Timestamptz `json:"deleted_at"`
 }
 
 type DocumentShare struct {

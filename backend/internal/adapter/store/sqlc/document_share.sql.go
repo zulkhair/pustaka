@@ -82,10 +82,10 @@ func (q *Queries) GetShare(ctx context.Context, arg GetShareParams) (DocumentSha
 }
 
 const listDocumentsSharedWith = `-- name: ListDocumentsSharedWith :many
-SELECT d.id, d.user_id, d.title, d.mode, d.page_count, d.status, d.created_at
+SELECT d.id, d.user_id, d.title, d.mode, d.page_count, d.status, d.created_at, d.deleted_at
 FROM document d
 JOIN document_share s ON s.document_id = d.id
-WHERE s.shared_with_user_id = $1
+WHERE s.shared_with_user_id = $1 AND d.deleted_at IS NULL
 ORDER BY d.created_at DESC
 `
 
@@ -106,6 +106,7 @@ func (q *Queries) ListDocumentsSharedWith(ctx context.Context, sharedWithUserID 
 			&i.PageCount,
 			&i.Status,
 			&i.CreatedAt,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}

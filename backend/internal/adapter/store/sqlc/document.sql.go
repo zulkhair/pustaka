@@ -12,7 +12,7 @@ import (
 const createDocument = `-- name: CreateDocument :one
 INSERT INTO document (id, user_id, title, mode)
 VALUES ($1, $2, $3, $4)
-RETURNING id, user_id, title, mode, page_count, status, created_at
+RETURNING id, user_id, title, mode, page_count, status, created_at, deleted_at
 `
 
 type CreateDocumentParams struct {
@@ -38,14 +38,15 @@ func (q *Queries) CreateDocument(ctx context.Context, arg CreateDocumentParams) 
 		&i.PageCount,
 		&i.Status,
 		&i.CreatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
 
 const getDocument = `-- name: GetDocument :one
-SELECT id, user_id, title, mode, page_count, status, created_at
+SELECT id, user_id, title, mode, page_count, status, created_at, deleted_at
 FROM document
-WHERE id = $1
+WHERE id = $1 AND deleted_at IS NULL
 `
 
 func (q *Queries) GetDocument(ctx context.Context, id string) (Document, error) {
@@ -59,6 +60,7 @@ func (q *Queries) GetDocument(ctx context.Context, id string) (Document, error) 
 		&i.PageCount,
 		&i.Status,
 		&i.CreatedAt,
+		&i.DeletedAt,
 	)
 	return i, err
 }
@@ -75,9 +77,9 @@ func (q *Queries) IncrementDocumentPageCount(ctx context.Context, id string) (in
 }
 
 const listDocumentsByUser = `-- name: ListDocumentsByUser :many
-SELECT id, user_id, title, mode, page_count, status, created_at
+SELECT id, user_id, title, mode, page_count, status, created_at, deleted_at
 FROM document
-WHERE user_id = $1
+WHERE user_id = $1 AND deleted_at IS NULL
 ORDER BY created_at DESC
 `
 
@@ -98,6 +100,7 @@ func (q *Queries) ListDocumentsByUser(ctx context.Context, userID string) ([]Doc
 			&i.PageCount,
 			&i.Status,
 			&i.CreatedAt,
+			&i.DeletedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -121,4 +124,39 @@ type SetDocumentStatusParams struct {
 func (q *Queries) SetDocumentStatus(ctx context.Context, arg SetDocumentStatusParams) error {
 	_, err := q.db.Exec(ctx, setDocumentStatus, arg.ID, arg.Status)
 	return err
+}
+
+const softDeleteDocument = `-- name: SoftDeleteDocument :exec
+UPDATE document SET deleted_at = now() WHERE id = $1
+`
+
+func (q *Queries) SoftDeleteDocument(ctx context.Context, id string) error {
+	_, err := q.db.Exec(ctx, softDeleteDocument, id)
+	return err
+}
+
+const updateDocumentTitle = `-- name: UpdateDocumentTitle :one
+UPDATE document SET title = $2 WHERE id = $1
+RETURNING id, user_id, title, mode, page_count, status, created_at, deleted_at
+`
+
+type UpdateDocumentTitleParams struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+func (q *Queries) UpdateDocumentTitle(ctx context.Context, arg UpdateDocumentTitleParams) (Document, error) {
+	row := q.db.QueryRow(ctx, updateDocumentTitle, arg.ID, arg.Title)
+	var i Document
+	err := row.Scan(
+		&i.ID,
+		&i.UserID,
+		&i.Title,
+		&i.Mode,
+		&i.PageCount,
+		&i.Status,
+		&i.CreatedAt,
+		&i.DeletedAt,
+	)
+	return i, err
 }

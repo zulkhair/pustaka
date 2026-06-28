@@ -113,6 +113,18 @@ func (s *Store) IncrementDocumentPageCount(ctx context.Context, id string) (int,
 	return int(n), nil
 }
 
+func (s *Store) UpdateDocumentTitle(ctx context.Context, id, title string) (domain.Document, error) {
+	r, err := s.q.UpdateDocumentTitle(ctx, sqlc.UpdateDocumentTitleParams{ID: id, Title: title})
+	if err != nil {
+		return domain.Document{}, mapErr(err)
+	}
+	return toDocument(r), nil
+}
+
+func (s *Store) SoftDeleteDocument(ctx context.Context, id string) error {
+	return mapErr(s.q.SoftDeleteDocument(ctx, id))
+}
+
 func (s *Store) CreatePage(ctx context.Context, p domain.CreatePageParams) (domain.Page, error) {
 	r, err := s.q.CreatePage(ctx, sqlc.CreatePageParams{
 		ID: p.ID, DocumentID: p.DocumentID, PageNumber: int32(p.PageNumber),

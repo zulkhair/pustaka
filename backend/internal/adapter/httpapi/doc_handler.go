@@ -80,6 +80,40 @@ func toDocDTOs(docs []domain.Document) []docDTO {
 	return out
 }
 
+type renameDocReq struct {
+	Title string `json:"title"`
+}
+
+func (h *DocHandler) Rename(c *fiber.Ctx) error {
+	uid, ok := localUserID(c)
+	if !ok {
+		return Fail(c, fiber.StatusUnauthorized, "unauthorized")
+	}
+	var req renameDocReq
+	if err := c.BodyParser(&req); err != nil {
+		return Fail(c, fiber.StatusBadRequest, "invalid body")
+	}
+	doc, err := h.svc.Rename(c.Context(), uid, c.Params("id"), req.Title)
+	if err != nil {
+		return mapDocError(c, err)
+	}
+	return OK(c, docDTO{
+		ID: doc.ID, Title: doc.Title, Mode: doc.Mode, Status: doc.Status,
+		PageCount: doc.PageCount, CreatedAt: doc.CreatedAt.Format("2006-01-02T15:04:05Z07:00"),
+	})
+}
+
+func (h *DocHandler) Delete(c *fiber.Ctx) error {
+	uid, ok := localUserID(c)
+	if !ok {
+		return Fail(c, fiber.StatusUnauthorized, "unauthorized")
+	}
+	if err := h.svc.Delete(c.Context(), uid, c.Params("id")); err != nil {
+		return mapDocError(c, err)
+	}
+	return OK(c, nil)
+}
+
 type pageDTO struct {
 	PageNumber int    `json:"pageNumber"`
 	Status     string `json:"status"`

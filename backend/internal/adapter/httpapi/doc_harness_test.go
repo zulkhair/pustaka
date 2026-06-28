@@ -112,6 +112,20 @@ func getJSON(t *testing.T, ta *docTestApp, path string) (int, docEnv) {
 	return doDoc(t, ta, httptest.NewRequest(http.MethodGet, path, nil))
 }
 
+func patchJSON(t *testing.T, ta *docTestApp, path string, body any) (int, docEnv) {
+	t.Helper()
+	raw, err := json.Marshal(body)
+	require.NoError(t, err)
+	req := httptest.NewRequest(http.MethodPatch, path, bytes.NewReader(raw))
+	req.Header.Set("Content-Type", "application/json")
+	return doDoc(t, ta, req)
+}
+
+func deleteJSON(t *testing.T, ta *docTestApp, path string) (int, docEnv) {
+	t.Helper()
+	return doDoc(t, ta, httptest.NewRequest(http.MethodDelete, path, nil))
+}
+
 func doDoc(t *testing.T, ta *docTestApp, req *http.Request) (int, docEnv) {
 	t.Helper()
 	resp, err := ta.app.Test(req, -1)
