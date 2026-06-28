@@ -27,6 +27,14 @@ class ApiClient {
     return _send(() => _dio.post<dynamic>(path, data: body), parse);
   }
 
+  Future<T> patch<T>(
+    String path, {
+    Object? body,
+    required T Function(Object? data) parse,
+  }) {
+    return _send(() => _dio.patch<dynamic>(path, data: body), parse);
+  }
+
   Future<T> delete<T>(
     String path, {
     required T Function(Object? data) parse,

@@ -82,6 +82,10 @@ final appRouterProvider = Provider<GoRouter>((ref) {
               path: '/doc/:id',
               builder: (c, s) => ReaderScreen(docId: s.pathParameters['id']!)),
           GoRoute(
+              name: 'resume',
+              path: '/doc/:id/capture',
+              builder: (c, s) => CaptureScreen(docId: s.pathParameters['id']!)),
+          GoRoute(
             name: 'transform',
             path: '/doc/:id/transform',
             builder: (c, s) => TransformScreen(docId: s.pathParameters['id']!),

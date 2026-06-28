@@ -51,4 +51,44 @@ void main() {
     expect(
         c.read(libraryControllerProvider).valueOrNull!.owned.first.id, 'new');
   });
+
+  test('rename replaces the owned doc in place', () async {
+    final repo = MockLibraryRepository();
+    when(repo.fetch)
+        .thenAnswer((_) async => (owned: [_doc('o1')], shared: <Document>[]));
+    when(() => repo.renameDocument('o1', 'Renamed')).thenAnswer(
+        (_) async => Document(
+              id: 'o1',
+              title: 'Renamed',
+              mode: CaptureMode.photo,
+              pageCount: 0,
+              status: DocStatus.pending,
+              createdAt: DateTime(2026),
+              isOwner: true,
+            ));
+    final c = ProviderContainer(
+        overrides: [libraryRepositoryProvider.overrideWithValue(repo)]);
+    addTearDown(c.dispose);
+
+    await c.read(libraryControllerProvider.future);
+    await c.read(libraryControllerProvider.notifier).rename('o1', 'Renamed');
+    final owned = c.read(libraryControllerProvider).valueOrNull!.owned;
+    expect(owned.single.id, 'o1');
+    expect(owned.single.title, 'Renamed');
+  });
+
+  test('delete removes the doc from owned', () async {
+    final repo = MockLibraryRepository();
+    when(repo.fetch).thenAnswer(
+        (_) async => (owned: [_doc('o1'), _doc('o2')], shared: <Document>[]));
+    when(() => repo.deleteDocument('o1')).thenAnswer((_) async {});
+    final c = ProviderContainer(
+        overrides: [libraryRepositoryProvider.overrideWithValue(repo)]);
+    addTearDown(c.dispose);
+
+    await c.read(libraryControllerProvider.future);
+    await c.read(libraryControllerProvider.notifier).delete('o1');
+    final owned = c.read(libraryControllerProvider).valueOrNull!.owned;
+    expect(owned.map((d) => d.id), ['o2']);
+  });
 }

@@ -32,6 +32,19 @@ class LibraryRepository {
           Document.fromJson(d! as Map<String, dynamic>).copyWith(isOwner: true),
     );
   }
+
+  Future<Document> renameDocument(String id, String title) {
+    return _client.patch<Document>(
+      '/documents/$id',
+      body: {'title': title},
+      parse: (d) =>
+          Document.fromJson(d! as Map<String, dynamic>).copyWith(isOwner: true),
+    );
+  }
+
+  Future<void> deleteDocument(String id) {
+    return _client.delete<void>('/documents/$id', parse: (_) {});
+  }
 }
 
 final libraryRepositoryProvider = Provider<LibraryRepository>(

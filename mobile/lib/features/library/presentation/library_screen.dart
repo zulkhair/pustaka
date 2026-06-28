@@ -33,11 +33,11 @@ class LibraryScreen extends ConsumerWidget {
               slivers: [
                 if (docs.owned.isNotEmpty) ...[
                   const _Header('Mine'),
-                  _Grid(docs: docs.owned),
+                  _Grid(docs: docs.owned, owned: true),
                 ],
                 if (docs.shared.isNotEmpty) ...[
                   const _Header('Shared with me'),
-                  _Grid(docs: docs.shared),
+                  _Grid(docs: docs.shared, owned: false),
                 ],
               ],
             ),
@@ -63,12 +63,13 @@ class _Header extends StatelessWidget {
   }
 }
 
-class _Grid extends StatelessWidget {
-  const _Grid({required this.docs});
+class _Grid extends ConsumerWidget {
+  const _Grid({required this.docs, required this.owned});
   final List<Document> docs;
+  final bool owned;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     return SliverPadding(
       padding: const EdgeInsets.symmetric(horizontal: 12),
       sliver: SliverGrid(
@@ -82,13 +83,70 @@ class _Grid extends StatelessWidget {
           (context, i) {
             final d = docs[i];
             return DocumentCard(
-                doc: d, onTap: () => context.push('/doc/${d.id}'));
+              doc: d,
+              onTap: () => context.push('/doc/${d.id}'),
+              onResume: owned ? () => context.push('/doc/${d.id}/capture') : null,
+              onRename: owned ? () => _promptRename(context, ref, d) : null,
+              onDelete: owned ? () => _confirmDelete(context, ref, d) : null,
+            );
           },
           childCount: docs.length,
         ),
       ),
     );
   }
+}
+
+Future<void> _promptRename(
+    BuildContext context, WidgetRef ref, Document doc) async {
+  final controller = TextEditingController(text: doc.title);
+  final title = await showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Rename document'),
+      content: TextField(
+        controller: controller,
+        autofocus: true,
+        decoration: const InputDecoration(labelText: 'Title'),
+        onSubmitted: (v) => Navigator.of(ctx).pop(v.trim()),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(),
+          child: const Text('Cancel'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.of(ctx).pop(controller.text.trim()),
+          child: const Text('Save'),
+        ),
+      ],
+    ),
+  );
+  if (title == null || title.isEmpty || title == doc.title) return;
+  await ref.read(libraryControllerProvider.notifier).rename(doc.id, title);
+}
+
+Future<void> _confirmDelete(
+    BuildContext context, WidgetRef ref, Document doc) async {
+  final ok = await showDialog<bool>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: const Text('Delete document'),
+      content: Text('Delete "${doc.title}"? You can ask an admin to restore it.'),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.of(ctx).pop(false),
+          child: const Text('Cancel'),
+        ),
+        FilledButton.tonal(
+          onPressed: () => Navigator.of(ctx).pop(true),
+          child: const Text('Delete'),
+        ),
+      ],
+    ),
+  );
+  if (ok != true) return;
+  await ref.read(libraryControllerProvider.notifier).delete(doc.id);
 }
 
 class _EmptyState extends StatelessWidget {

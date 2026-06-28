@@ -21,6 +21,26 @@ class LibraryController extends AsyncNotifier<LibraryDocs> {
     state = AsyncData((owned: [doc, ...cur.owned], shared: cur.shared));
     return doc;
   }
+
+  Future<void> rename(String id, String title) async {
+    final updated = await _repo.renameDocument(id, title);
+    final cur = state.valueOrNull;
+    if (cur == null) return;
+    state = AsyncData((
+      owned: [for (final d in cur.owned) d.id == id ? updated : d],
+      shared: cur.shared,
+    ));
+  }
+
+  Future<void> delete(String id) async {
+    await _repo.deleteDocument(id);
+    final cur = state.valueOrNull;
+    if (cur == null) return;
+    state = AsyncData((
+      owned: cur.owned.where((d) => d.id != id).toList(),
+      shared: cur.shared,
+    ));
+  }
 }
 
 final libraryControllerProvider =
