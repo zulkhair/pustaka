@@ -45,6 +45,14 @@ class LibraryRepository {
   Future<void> deleteDocument(String id) {
     return _client.delete<void>('/documents/$id', parse: (_) {});
   }
+
+  Future<void> setThumbnail(String id, int page) {
+    return _client.patch<void>(
+      '/documents/$id/thumbnail',
+      body: {'page': page},
+      parse: (_) {},
+    );
+  }
 }
 
 final libraryRepositoryProvider = Provider<LibraryRepository>(

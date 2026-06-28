@@ -77,6 +77,24 @@ void main() {
     expect(owned.single.title, 'Renamed');
   });
 
+  test('setThumbnail calls repo then refetches', () async {
+    final repo = MockLibraryRepository();
+    var fetches = 0;
+    when(repo.fetch).thenAnswer((_) async {
+      fetches++;
+      return (owned: [_doc('o1')], shared: <Document>[]);
+    });
+    when(() => repo.setThumbnail('o1', 2)).thenAnswer((_) async {});
+    final c = ProviderContainer(
+        overrides: [libraryRepositoryProvider.overrideWithValue(repo)]);
+    addTearDown(c.dispose);
+
+    await c.read(libraryControllerProvider.future); // fetch #1
+    await c.read(libraryControllerProvider.notifier).setThumbnail('o1', 2);
+    verify(() => repo.setThumbnail('o1', 2)).called(1);
+    expect(fetches, 2); // refetched after the set
+  });
+
   test('delete removes the doc from owned', () async {
     final repo = MockLibraryRepository();
     when(repo.fetch).thenAnswer(

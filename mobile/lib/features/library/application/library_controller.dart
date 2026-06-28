@@ -41,6 +41,13 @@ class LibraryController extends AsyncNotifier<LibraryDocs> {
       shared: cur.shared,
     ));
   }
+
+  Future<void> setThumbnail(String id, int page) async {
+    await _repo.setThumbnail(id, page);
+    // Refetch silently: the PATCH response omits the cover's thumbUrl, so reload
+    // to pick up the new cover image without flashing a loading state.
+    state = AsyncData(await _repo.fetch());
+  }
 }
 
 final libraryControllerProvider =

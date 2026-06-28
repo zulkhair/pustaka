@@ -26,6 +26,7 @@ class Document {
     required this.pageCount,
     required this.status,
     required this.createdAt,
+    this.thumbPage = 1,
     this.isOwner = false,
     this.thumbUrl,
   });
@@ -36,6 +37,9 @@ class Document {
   final int pageCount;
   final DocStatus status;
   final DateTime createdAt;
+
+  /// Which scanned page is used as the cover (1-based).
+  final int thumbPage;
 
   /// NOT from JSON — the repository sets it (true for `owned`, false for `shared`).
   final bool isOwner;
@@ -50,6 +54,7 @@ class Document {
       status: docStatusFromString(json['status']),
       createdAt: DateTime.tryParse(json['createdAt'] as String? ?? '') ??
           DateTime.fromMillisecondsSinceEpoch(0),
+      thumbPage: json['thumbPage'] as int? ?? 1,
       thumbUrl: json['thumbUrl'] as String?,
     );
   }
@@ -62,6 +67,7 @@ class Document {
       pageCount: pageCount,
       status: status,
       createdAt: createdAt,
+      thumbPage: thumbPage,
       isOwner: isOwner ?? this.isOwner,
       thumbUrl: thumbUrl,
     );
